@@ -10,6 +10,7 @@
 /depcomp
 /install-sh
 /missing
+/test-driver
 
 # configure artifacts
 /config.log
@@ -30,3 +31,9 @@
 
 # generated files from test runs
 ross.csv
+
+# misc
+#  install directory
+install/
+#  build directory
+build/

@@ -1,0 +1,3 @@
+nobase_include_HEADERS = \
+	codes/codes-store-common.h \
+	codes/codes-store-cli.h
