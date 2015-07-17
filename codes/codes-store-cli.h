@@ -7,6 +7,7 @@
 #ifndef CODES_STORE_CLI_H
 #define CODES_STORE_CLI_H
 
+#include <codes/lp-msg.h>
 #include <codes/codes-callback.h>
 
 #include "codes-store-common.h"
@@ -16,6 +17,7 @@ void codes_store_send_req(
         int model_net_id,
         tw_lp * sender,
         int tag,
+        msg_header const * m,
         struct codes_cb_info const * cb);
 
 void codes_store_send_req_rc(tw_lp * sender);

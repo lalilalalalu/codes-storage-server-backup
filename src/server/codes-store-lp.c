@@ -4,8 +4,6 @@
  *
  */
 
-char const * const CODES_STORE_LP_NAME = "codes-store";
-
 /*
  * Local variables:
  *  c-indent-level: 4
