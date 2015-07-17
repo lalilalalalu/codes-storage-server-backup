@@ -7,8 +7,9 @@
 #ifndef CODES_STORE_CLI_H
 #define CODES_STORE_CLI_H
 
-#include "codes/codes-store-common.h"
-#include "codes/codes-callback.h"
+#include <codes/codes-callback.h>
+
+#include "codes-store-common.h"
 
 void codes_store_send_req(
         struct codes_store_request const * r,

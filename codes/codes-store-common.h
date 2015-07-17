@@ -8,6 +8,7 @@
 #define CODES_STORE_COMMON_H
 
 #include <stdint.h>
+#include <ross.h>
 
 extern char const * const CODES_STORE_LP_NAME;
 
