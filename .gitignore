@@ -1,0 +1,32 @@
+# automake artifacts
+/Makefile.in
+/aclocal.m4
+/autom4te.cache/
+/codes_ss_config.h.in
+/compile
+/config.guess
+/config.sub
+/configure
+/depcomp
+/install-sh
+/missing
+
+# configure artifacts
+/config.log
+/config.status
+/Makefile
+/stamp-h1
+/codes_base_config.h
+/maint/codes-base.pc
+.deps
+
+# make generated artifacts
+.dirstamp
+*.o
+*.a
+
+# hide backups
+*~
+
+# generated files from test runs
+ross.csv

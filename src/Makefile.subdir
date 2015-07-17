@@ -1,0 +1,3 @@
+lib_LIBRARIES += src/libcodes-storage-server.a
+
+src_libcodes_storage_server_a_SOURCES = src/foo.c

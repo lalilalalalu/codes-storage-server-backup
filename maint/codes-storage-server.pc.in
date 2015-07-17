@@ -1,0 +1,12 @@
+prefix = @prefix@
+exec_prefix = @exec_prefix@
+libdir=@libdir@
+includedir=@includedir@
+
+Name: codes-storage-server
+Description: Storage LPs, specifically geared towards node-local / burst-buffer storage
+Version: @PACKAGE_VERSION@
+URL: http://www.mcs.anl.gov/research/projects/codes/
+Requires: codes-net codes-base
+Libs: -L${libdir} -lcodes-storage-server
+Cflags: -I${includedir}
