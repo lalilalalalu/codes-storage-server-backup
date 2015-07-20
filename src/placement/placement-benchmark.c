@@ -16,8 +16,8 @@
 #include <limits.h>
 #include <sys/time.h>
 
-#include "../input-generator/objects.h"
-#include "../input-generator/placement.h"
+#include "../placement/objects.h"
+#include "../placement/placement.h"
 
 struct options
 {

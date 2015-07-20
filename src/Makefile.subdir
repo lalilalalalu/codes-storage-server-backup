@@ -32,6 +32,10 @@ src_libcodes_storage_server_a_SOURCES = \
 	src/placement/placement-xor.h \
 	src/placement/placement.c \
 	src/placement/placement.h \
+	src/placement/util/spooky.cpp \
+	src/placement/util/spooky.h \
+	src/placement/util/SpookyV2.cpp \
+	src/placement/util/SpookyV2.h \
 	src/util/dist.c \
 	src/util/dist.h \
 	src/util/io-sim-mode.c \

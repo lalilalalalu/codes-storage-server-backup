@@ -17,9 +17,8 @@
 #include "codes/rc-stack.h"
 #include "rosd.h"
 #include "rosd-creq.h"
-#include "../client/client.h"
 #include "../util/msg.h"
-#include "../input-generator/placement.h"
+#include "../placement/placement.h"
 #include "../util/io-sim-mode.h"
 #include "../util/map_util.h"
 

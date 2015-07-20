@@ -12,7 +12,7 @@
 #include "codes/lp-msg.h"
 #include "codes/model-net-sched.h"
 #include "../server/rosd.h"
-#include "../input-generator/placement.h"
+#include "../placement/placement.h"
 #include "map_util.h"
 
 void triton_send_request(triton_io_greq *r, tw_lp *sender, int model_net_id){
