@@ -3,4 +3,42 @@ lib_LIBRARIES += src/libcodes-storage-server.a
 src_libcodes_storage_server_a_SOURCES = \
 	src/codes-store-common.c \
 	src/client/codes-store-cli.c \
-	src/server/codes-store-lp.c
+	src/server/codes-store-lp.c \
+	src/server/rosd-common.h \
+	src/server/rosd-creq.c \
+	src/server/rosd-creq.h \
+	src/server/rosd.c \
+	src/server/rosd.h \
+	src/placement/comb.h \
+	src/placement/input-generator.c \
+	src/placement/input-generator.h \
+	src/placement/objects.c \
+	src/placement/objects.h \
+	src/placement/placement-benchmark.c \
+	src/placement/placement-euclid-1d.c \
+	src/placement/placement-euclid-1d.h \
+	src/placement/placement-euclid-2d.c \
+	src/placement/placement-euclid-2d.h \
+	src/placement/placement-hash-spooky.c \
+	src/placement/placement-hash-spooky.h \
+	src/placement/placement-hash.c \
+	src/placement/placement-hash.h \
+	src/placement/placement-mod.h \
+	src/placement/placement-multiring.c \
+	src/placement/placement-multiring.h \
+	src/placement/placement-virt.c \
+	src/placement/placement-virt.h \
+	src/placement/placement-xor.c \
+	src/placement/placement-xor.h \
+	src/placement/placement.c \
+	src/placement/placement.h \
+	src/util/dist.c \
+	src/util/dist.h \
+	src/util/io-sim-mode.c \
+	src/util/io-sim-mode.h \
+	src/util/map_util.c \
+	src/util/map_util.h \
+	src/util/msg.c \
+	src/util/msg.h \
+	src/util/wkld_config.c \
+	src/util/wkld_config.h
