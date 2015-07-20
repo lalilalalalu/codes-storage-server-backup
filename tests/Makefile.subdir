@@ -1,0 +1,5 @@
+check_PROGRAMS += tests/dummy
+
+TESTS += tests/dummy
+
+test_dummy_SOURCES = tests/dummy.c

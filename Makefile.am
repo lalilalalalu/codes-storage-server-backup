@@ -24,11 +24,15 @@ AM_CPPFLAGS = ${CODES_NET_CFLAGS}
 
 AM_CFLAGS =
 
-AM_LDFLAGS = ${CODES_NET_LIBS}
+AM_LDFLAGS =
 
 AM_CXXFLAGS = $(AM_CFLAGS)
+
+# all programs/tests use the libraries here
+LDADD = $(lib_LIBRARIES) ${CODES_NET_LIBS}
 
 include Make.rules
 
 include $(top_srcdir)/codes/Makefile.subdir
 include $(top_srcdir)/src/Makefile.subdir
+include $(top_srcdir)/tests/Makefile.subdir
