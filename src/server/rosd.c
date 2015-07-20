@@ -19,7 +19,6 @@
 #include "rosd-creq.h"
 #include "../util/msg.h"
 #include "../placement/placement.h"
-#include "../util/io-sim-mode.h"
 #include "../util/map_util.h"
 
 /// danger: debug messages will produce a LOT of output, even for small runs
