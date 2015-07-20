@@ -39,6 +39,4 @@ src_libcodes_storage_server_a_SOURCES = \
 	src/util/map_util.c \
 	src/util/map_util.h \
 	src/util/msg.c \
-	src/util/msg.h \
-	src/util/wkld_config.c \
-	src/util/wkld_config.h
+	src/util/msg.h
