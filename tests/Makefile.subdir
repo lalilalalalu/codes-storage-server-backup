@@ -1,5 +1,10 @@
-check_PROGRAMS += tests/dummy
+check_PROGRAMS += tests/dummy tests/rosd-test-simple
 
-TESTS += tests/dummy
+TESTS += tests/dummy tests/rosd-test-simple
 
 tests_dummy_SOURCES = tests/dummy.c
+
+tests_rosd_test_simple_SOURCES = \
+	tests/rosd-test-simple.c \
+	tests/rosd-test-client.h \
+	tests/rosd-test-client.c
