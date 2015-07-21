@@ -45,15 +45,6 @@
 
 int rosd_magic = 0;
 
-static rosd_fwd_mode fwd_mode;
-static rosd_ack_mode ack_mode;
-
-/// forwarding protocol strings
-#define X(a,b) b,
-static char const * const fwd_mode_strs[] = { FWD_MODES };
-static char const * const ack_mode_strs[] = { ACK_MODES };
-#undef X
-
 extern int model_net_id;
 
 /* system parameters */
@@ -223,27 +214,6 @@ void rosd_configure(){
 
     char val[MAX_NAME_LENGTH];
 #endif
-    /* until we get rid of forwarding logic... */
-    fwd_mode = FWD_CHAIN;
-    ack_mode = ACK_ALL_COMMIT;
-#if 0
-    /* get the forwarding mode */
-    rc = configuration_get_value(&config, ROSD_LP_NM, "forward_mode", NULL,
-            val, MAX_NAME_LENGTH);
-    assert(rc>0);
-    if (rosd_get_fwd_mode(val, &fwd_mode)){
-        fprintf(stderr, "unknown mode for rosd:forward_mode config entry\n");
-        exit(1);
-    }
-    /* get the acking mode */
-    rc = configuration_get_value(&config, ROSD_LP_NM, "ack_mode", NULL,
-            val, MAX_NAME_LENGTH);
-    assert(rc>0);
-    if (rosd_get_ack_mode(val, &ack_mode)){
-        fprintf(stderr, "unknown mode for rosd:ack_mode config entry\n");
-        exit(1);
-    }
-#endif
 
     // get the number of threads and the pipeline buffer size
     // if not available, no problem - use a default of 4 threads, 4MB per
@@ -254,12 +224,6 @@ void rosd_configure(){
             NULL, &pipeline_unit_size);
 
 #if 0
-    /* check the modes for compatibility */
-    if (!is_rosd_valid_fwd_config(fwd_mode, ack_mode)){
-        fprintf(stderr, "fwd/ack modes are incompatible\n");
-        exit(1);
-    }
-
     /* get the placement algorithm */
     rc = configuration_get_value(&config, ROSD_LP_NM, "placement", 
             NULL, val, MAX_NAME_LENGTH);
@@ -690,13 +654,6 @@ void handle_recv_io_req(
         qi->chain_pos = 0;
         qi->cli_cb = m->u.creq.callback;
         qi->type = m->u.creq.req.req_type;
-        // if we're in FAN+ALL_RECV, then we use a special status to track from
-        // all in the fan
-        if (fwd_mode == FWD_FAN && ack_mode == ACK_ALL_RECV){
-            memset(qi->recv_status, 0, 
-                    replication_factor*sizeof(*qi->recv_status));
-            qi->recv_status_ct = 0;
-        }
     }
 #if 0
     NO SERVER-SERVER OPS
@@ -896,8 +853,10 @@ void handle_pipeline_alloc_callback(
             // add to statistics
             if (qi->type == REQ_WRITE) {
                 ns->bytes_written_local += qi->req->committed;
+#if 0
                 uint64_t mult = (fwd_mode == FWD_FAN) ? replication_factor-1 : 1;
                 ns->bytes_forwarded += qi->req->forwarded * mult;
+#endif
             }
             else {
                 ns->bytes_read_local += qi->req->committed;
@@ -1449,8 +1408,10 @@ static void handle_async_completion(
                             m->h.event_type==COMPLETE_DISK_OP ? "disk":"fwd");
                     qlist_del(&qi->ql);
                     ns->bytes_written_local += qi->req->committed;
+#if 0
                     uint64_t mult = (fwd_mode==FWD_FAN) ? replication_factor-1 : 1;
                     ns->bytes_forwarded += qi->req->forwarded * mult;
+#endif
                     rc_stack_push(lp, qi, ns->finished_pipeline_ops);
                     b->c4 = 1;
                 }
@@ -1912,8 +1873,10 @@ void handle_pipeline_alloc_callback_rc(
         // undo the stats
         if (qi->type == REQ_WRITE) {
             ns->bytes_written_local -= qi->req->committed;
+#if 0
             uint64_t mult = (fwd_mode==FWD_FAN) ? replication_factor-1 : 1;
             ns->bytes_forwarded -= qi->req->forwarded * mult;
+#endif
         }
         else {
             ns->bytes_read_local -= qi->req->committed;
@@ -2143,8 +2106,10 @@ static void handle_async_completion_rc(
         qlist_add_tail(&qi->ql, &ns->pending_pipeline_ops);
         // undo the stats
         ns->bytes_written_local -= qi->req->committed;
+#if 0
         uint64_t mult = (fwd_mode==FWD_FAN) ? replication_factor-1 : 1;
         ns->bytes_forwarded -= qi->req->forwarded * mult;
+#endif
     }
     else{
         struct qlist_head *ent = NULL;
@@ -2178,6 +2143,7 @@ static void handle_async_completion_rc(
     // recreate the "finished" request status if needed
     if (b->c1 && b->c2){
         t->status.local_status = 1;
+#if 0
         if (fwd_mode == FWD_CHAIN){
             t->status.fwd_status_ct = 1;
         }
@@ -2187,6 +2153,7 @@ static void handle_async_completion_rc(
                 t->status.fwd_status[i] = 1;
             }
         }
+#endif
     }
 
     // reverse the status completion
@@ -2402,32 +2369,6 @@ void handle_complete_chunk_send_rc(
     t->chunk_id = m->u.complete_chunk_send.rc.chunk_id;
     t->chunk_size = m->u.complete_chunk_send.rc.chunk_size;
     qi->req->forwarded -= t->chunk_size;
-}
-
-int is_rosd_valid_fwd_config(rosd_fwd_mode f, rosd_ack_mode a){
-    return f < NUM_FWD_MODES && a < NUM_ACK_MODES;
-}
-
-int rosd_get_ack_mode(char const * mode, rosd_ack_mode *a){
-    int i;
-    for (i = 0; i < NUM_ACK_MODES; i++){
-        if (strcmp(mode, ack_mode_strs[i]) == 0){
-            *a = i;
-            return 0;
-        }
-    }
-    return 1;
-}
-
-int rosd_get_fwd_mode(char const * mode, rosd_fwd_mode *f){
-    int i;
-    for (i = 0; i < NUM_FWD_MODES; i++){
-        if (strcmp(mode, fwd_mode_strs[i]) == 0){
-             *f = i;
-             return 0;
-        }
-    }
-    return 1;
 }
 
 /*
