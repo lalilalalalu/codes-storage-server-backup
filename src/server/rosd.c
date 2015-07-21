@@ -418,8 +418,7 @@ void handle_recv_io_req(
         qm->op_id = ns->op_idx_pl++;
         qm->src_lp = m->h.src;
         qm->status.local_status = 0;
-        qm->req =
-            (m->h.event_type==RECV_CLI_REQ) ? m->u.creq.req : m->u.sreq.req;
+        qm->req = m->u.creq.req;
         cb_id.op_id = qm->op_id;
         cb_id.tid = -1;
 
@@ -1662,8 +1661,7 @@ void handle_recv_io_req_rc(
         triton_rosd_msg * m,
         tw_lp * lp){
 
-    int op_id_prev = (m->h.event_type==RECV_CLI_REQ) ?
-        m->u.creq.rc.op_id : m->u.sreq.rc.op_id;
+    int op_id_prev = m->u.creq.rc.op_id;
 
     if (m->u.creq.req.req_type == REQ_OPEN) {
         // find the related request or die trying
@@ -1924,12 +1922,7 @@ static void handle_async_meta_completion_rc(
         triton_rosd_msg * m,
         tw_lp * lp){
     int id;
-    if (m->h.event_type == COMPLETE_DISK_OP){
-        id = m->u.complete_sto.id.op_id;
-    }
-    else{
-        id = m->u.recv_meta_ack.op_id;
-    }
+    id = m->u.complete_sto.id.op_id;
 
     rosd_meta_qitem *qi;
     if (b->c0) {
@@ -1986,12 +1979,7 @@ static void handle_async_completion_rc(
     rosd_callback_id *id;
     int prev_chunk_id;
     uint64_t prev_chunk_size;
-    if (m->h.event_type == COMPLETE_DISK_OP){
-        id = &m->u.complete_sto.id;
-    }
-    else{
-        id = &m->u.chunk_ack.id;
-    }
+    id = &m->u.complete_sto.id;
 
     // get the operation
     rosd_pipeline_qitem *qi = NULL;
@@ -2026,7 +2014,7 @@ static void handle_async_completion_rc(
         prev_chunk_size = t->chunk_size;
         prev_chunk_id = -1; // unused
     }
-    else if (m->h.event_type == COMPLETE_DISK_OP){
+    else {
         prev_chunk_size = m->u.complete_sto.rc.chunk_size;
         prev_chunk_id   = m->u.complete_sto.rc.chunk_id;
     }
@@ -2054,14 +2042,12 @@ static void handle_async_completion_rc(
     }
 
     // reverse the status completion
-    if (m->h.event_type == COMPLETE_DISK_OP){
-        lprintf("%lu: commit:%lu-%lu\n", lp->gid,
-                qi->req->committed, prev_chunk_size);
-        qi->req->committed -= prev_chunk_size;
-        t->status.local_status = 0;
-        if (b->c0){
-            triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
-        }
+    lprintf("%lu: commit:%lu-%lu\n", lp->gid,
+            qi->req->committed, prev_chunk_size);
+    qi->req->committed -= prev_chunk_size;
+    t->status.local_status = 0;
+    if (b->c0){
+        triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
     }
 #if 0
     else if (fwd_mode == FWD_CHAIN){

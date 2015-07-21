@@ -84,16 +84,6 @@ struct triton_rosd_msg {
             rosd_callback_id id;
         } recv_chunk; // RECV_CHUNK
         struct {
-            request_params req; // request params for the ind. chunk
-            triton_cli_callback callback; // need to propagate for all_recv+chain 
-            uint64_t total_req_sz; // size of overall message
-            rosd_callback_id id; // id to pass back to requester
-            int chain_pos; // position in forwarding chain
-            struct {
-                int op_id; // needed to map to created op id
-            } rc;
-        } sreq; // RECV_SRV_REQ
-        struct {
             rosd_callback_id id;
             // data vs. metadata req - controls which queue will be searched
             int is_data_op;
@@ -102,22 +92,6 @@ struct triton_rosd_msg {
                 uint64_t chunk_size;
             } rc;
         } complete_sto; // COMPLETE_DISK_OP
-        struct {
-            int op_id; // op id of the receiving server
-            int chain_pos; // id of the sending server
-        } recv_meta_ack; // RECV_METADATA_ACK **AND** RECV_METADATA_FWD_ACK
-        struct {
-            int op_id; // op id of receiving server 
-            int chain_pos; // id of sending server
-        } recv_data_ack; // RECV_DATA_ACK
-        struct {
-            rosd_callback_id id;
-            int chain_pos; // need for fan protocol
-            struct {
-                int chunk_id;
-                uint64_t chunk_size;
-            } rc;
-        } chunk_ack; // RECV_CHUNK_FWD_ACK
         struct {
             rosd_callback_id id;
             struct {
