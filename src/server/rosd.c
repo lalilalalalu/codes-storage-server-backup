@@ -357,13 +357,14 @@ void handle_recv_io_req(
         triton_rosd_msg *m_local;
         // FORWARDING triton_rosd_msg m_fwd;
         rosd_callback_id cb_id;
-        rosd_meta_qitem *qm = malloc(sizeof(*qm));
+        rosd_qitem *qm = malloc(sizeof(*qm));
         assert(qm);
 
         qm->cli_lp = m->h.src;
         qm->cli_cb = m->u.creq.callback;
         qm->op_id = ns->op_idx_pl++;
         qm->req = m->u.creq.req;
+        qm->preq = NULL;
         cb_id.op_id = qm->op_id;
         cb_id.tid = -1;
 
@@ -656,9 +657,9 @@ static void handle_async_meta_completion(
 
     // find the meta op
     struct qlist_head *ent = NULL;
-    rosd_meta_qitem *qi = NULL;
+    rosd_qitem *qi = NULL;
     qlist_for_each(ent, &ns->pending_meta_ops){
-        qi = qlist_entry(ent, rosd_meta_qitem, ql);
+        qi = qlist_entry(ent, rosd_qitem, ql);
         if (qi->op_id == id){
             break;
         }
@@ -945,11 +946,11 @@ void handle_recv_io_req_rc(
 
     if (m->u.creq.req.req_type == REQ_OPEN) {
         // find the related request or die trying
-        rosd_meta_qitem *qm = NULL;
+        rosd_qitem *qm = NULL;
         struct qlist_head *ent;
         assert(!qlist_empty(&ns->pending_meta_ops));
         qlist_for_each(ent, &ns->pending_meta_ops) {
-            qm = qlist_entry(ent, rosd_meta_qitem, ql);
+            qm = qlist_entry(ent, rosd_qitem, ql);
             if (qm->op_id == op_id_prev)
                 break;
         }
@@ -1098,7 +1099,7 @@ static void handle_async_meta_completion_rc(
     int id;
     id = m->u.complete_sto.id.op_id;
 
-    rosd_meta_qitem *qi;
+    rosd_qitem *qi;
     if (b->c0) {
         qi = rc_stack_pop(ns->finished_meta_ops);
         assert(qi != NULL);
@@ -1106,7 +1107,7 @@ static void handle_async_meta_completion_rc(
     else {
         struct qlist_head *ent;
         qlist_for_each(ent, &ns->pending_meta_ops) {
-            qi = qlist_entry(ent, rosd_meta_qitem, ql);
+            qi = qlist_entry(ent, rosd_qitem, ql);
             if (qi->op_id == id)
                 break;
         }

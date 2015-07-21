@@ -53,6 +53,7 @@ enum triton_rosd_event_type {
 
 typedef struct rosd_meta_qitem rosd_meta_qitem;
 typedef struct rosd_pipeline_qitem rosd_pipeline_qitem;
+typedef struct rosd_qitem rosd_qitem;
 // a wrapper for a pipelined op id and a thread id
 typedef struct rosd_callback_id {
     int op_id; // pipelined op id
@@ -122,10 +123,18 @@ struct rosd_meta_qitem {
     // my op id
     int op_id;
     request_params req;
-    // must store both the client and the actual source, for the case when we
-    // send an ack to the client from a non-primary server (all_recv+chain)
     tw_lpid cli_lp;
     triton_cli_callback cli_cb;  // for client-server reqs
+    struct qlist_head ql;
+};
+
+struct rosd_qitem {
+    // my op id
+    int op_id;
+    request_params req;
+    tw_lpid cli_lp;
+    triton_cli_callback cli_cb;  // for client-server reqs
+    rosd_pipelined_req *preq;
     struct qlist_head ql;
 };
 
