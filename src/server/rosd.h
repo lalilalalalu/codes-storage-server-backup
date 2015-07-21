@@ -46,17 +46,6 @@ enum triton_rosd_event_type {
     // local storage operation completed
     // - all servers
     COMPLETE_DISK_OP,
-    // metadata operation has been received  on the forwarded server
-    RECV_METADATA_ACK,
-    // metadata operation has been completed on the forwarded server
-    RECV_METADATA_FWD_ACK,
-    // all req data received (not yet committed) by dest server
-    // this is used with only the fan+all_recv protocol
-    // - all servers can receive this from another server
-    RECV_DATA_ACK,
-    // forwarding operation completed, on a per-chunk basis
-    // - all servers except tail replicas
-    RECV_CHUNK_FWD_ACK,
     // data read - data can be considered sent to client for the purposes of
     // reusing the message buffer
     // - all servers

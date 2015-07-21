@@ -256,29 +256,9 @@ void triton_rosd_event_handler(
         case RECV_CHUNK:
             handle_recv_chunk(ns, b, m, lp);
             break;
-#if 0
-        case RECV_SRV_REQ:
-            // uses same code path as client with hooks
-            handle_recv_io_req(ns, b, m, lp);
-            break;
-#endif
         case COMPLETE_DISK_OP:
             handle_complete_disk_op(ns, b, m, lp);
             break;
-#if 0
-        case RECV_METADATA_ACK:
-            handle_recv_metadata_ack(ns, b, m, lp);
-            break;
-        case RECV_METADATA_FWD_ACK:
-            handle_recv_metadata_fwd_ack(ns, b, m, lp);
-            break;
-        case RECV_DATA_ACK:
-            handle_recv_data_ack(ns, b, m, lp);
-            break;
-        case RECV_CHUNK_FWD_ACK:
-            handle_recv_chunk_fwd_ack(ns, b, m, lp);
-            break;
-#endif
         case COMPLETE_CHUNK_SEND:
             handle_complete_chunk_send(ns, b, m, lp);
             break;
@@ -316,28 +296,9 @@ void triton_rosd_event_handler_rc(
         case RECV_CHUNK:
             handle_recv_chunk_rc(ns, b, m, lp);
             break;
-#if 0
-        case RECV_SRV_REQ:
-            handle_recv_io_req_rc(ns, b, m, lp);
-            break;
-#endif
         case COMPLETE_DISK_OP:
             handle_complete_disk_op_rc(ns, b, m, lp);
             break;
-#if 0
-        case RECV_METADATA_ACK:
-            handle_recv_metadata_ack_rc(ns, b, m, lp);
-            break;
-        case RECV_METADATA_FWD_ACK:
-            handle_recv_metadata_fwd_ack_rc(ns, b, m, lp);
-            break;
-        case RECV_DATA_ACK:
-            handle_recv_data_ack_rc(ns, b, m, lp);
-            break;
-        case RECV_CHUNK_FWD_ACK:
-            handle_recv_chunk_fwd_ack_rc(ns, b, m, lp);
-            break;
-#endif
         case COMPLETE_CHUNK_SEND:
             handle_complete_chunk_send_rc(ns, b, m, lp);
             break;
