@@ -218,8 +218,6 @@ void triton_rosd_init(triton_rosd_state *ns, tw_lp *lp) {
 
     INIT_QLIST_HEAD(&ns->pending_pipeline_ops);
     rc_stack_create(&ns->finished_pipeline_ops);
-    INIT_QLIST_HEAD(&ns->pending_chunk_ops);
-    rc_stack_create(&ns->finished_chunk_ops);
     INIT_QLIST_HEAD(&ns->pending_meta_ops);
     rc_stack_create(&ns->finished_meta_ops);
 
@@ -244,7 +242,6 @@ void triton_rosd_event_handler(
 
     /* perform a garbage collection */
     rc_stack_gc(lp, 1, ns->finished_pipeline_ops);
-    rc_stack_gc(lp, 1, ns->finished_chunk_ops);
 
     switch (m->h.event_type){
         case RECV_CLI_REQ:
@@ -313,7 +310,6 @@ void triton_rosd_event_handler_rc(
 
 void triton_rosd_finalize(triton_rosd_state *ns, tw_lp *lp) {
     rc_stack_destroy(1, ns->finished_pipeline_ops);
-    rc_stack_destroy(1, ns->finished_chunk_ops);
 
     // check for pending operations that did not complete or were not removed
     struct qlist_head *ent;
@@ -322,12 +318,6 @@ void triton_rosd_finalize(triton_rosd_state *ns, tw_lp *lp) {
         fprintf(stderr, "WARNING: LP %lu with incomplete qitem "
                 "(cli lp %lu, op id %d)\n",
                 lp->gid, qi->cli_lp, qi->op_id);
-    }
-    qlist_for_each(ent, &ns->pending_chunk_ops){
-        rosd_chunk_req_info *info = qlist_entry(ent, rosd_chunk_req_info, ql);
-        fprintf(stderr, "WARNING: LP %lu with incomplete chunk op item "
-            "(cli lp %lu, op id %d)\n",
-            lp->gid, info->cli_src, info->cli_op_id);
     }
     int written = 0;
     if (ns->server_index == 0){
@@ -340,14 +330,13 @@ void triton_rosd_finalize(triton_rosd_state *ns, tw_lp *lp) {
                 "\n");
     }
     written += sprintf(ns->output_buf+written,
-            "%d %lu %lu %lu %lu %lu"
+            "%d %lu %lu %lu"
 #if ROSD_PRINT_RNG == 1
             " %lu %lu"
 #endif
             "\n",
             ns->server_index, lp->gid,
-            ns->bytes_read_local, ns->bytes_written_local,
-            ns->bytes_returned, ns->bytes_forwarded
+            ns->bytes_read_local, ns->bytes_written_local
 #if ROSD_PRINT_RNG == 1
             , lp->rng[0].count, lp->rng[1].count
 #endif
@@ -721,10 +710,6 @@ void handle_pipeline_alloc_callback(
             // add to statistics
             if (qi->type == REQ_WRITE) {
                 ns->bytes_written_local += qi->req->committed;
-#if 0
-                uint64_t mult = (fwd_mode == FWD_FAN) ? replication_factor-1 : 1;
-                ns->bytes_forwarded += qi->req->forwarded * mult;
-#endif
             }
             else {
                 ns->bytes_read_local += qi->req->committed;
@@ -937,10 +922,6 @@ static void handle_async_completion(
                         m->h.event_type==COMPLETE_DISK_OP ? "disk":"fwd");
                 qlist_del(&qi->ql);
                 ns->bytes_written_local += qi->req->committed;
-#if 0
-                uint64_t mult = (fwd_mode==FWD_FAN) ? replication_factor-1 : 1;
-                ns->bytes_forwarded += qi->req->forwarded * mult;
-#endif
                 rc_stack_push(lp, qi, ns->finished_pipeline_ops);
                 b->c4 = 1;
             }
@@ -1177,7 +1158,6 @@ void handle_complete_chunk_send(
         if (qi->req->nthreads_fin == qi->req->nthreads) {
             b->c1 = 1;
             ns->bytes_read_local += qi->req->committed;
-            ns->bytes_returned += qi->req->forwarded;
             lprintf("%lu: rm op %d (compl chunk send)\n", lp->gid, qi->op_id);
             qlist_del(&qi->ql);
             rc_stack_push(lp, qi, ns->finished_pipeline_ops);
@@ -1299,26 +1279,6 @@ void handle_recv_io_req_rc(
     // before doing cleanups (free(...)), reverse the alloc event
     pipeline_alloc_event_rc(b, lp, op_id_prev, qi->req);
 
-    // find and delete the chunk info, but only if it was created in the
-    // corresponding io req
-#if 0
-    FORWARDED SERVER
-    if (m->h.event_type != RECV_CLI_REQ && b->c0) {
-        rosd_chunk_req_info *id = NULL;
-        struct qlist_head *chunk_ent;
-        qlist_for_each(chunk_ent, &ns->pending_chunk_ops){
-            id = qlist_entry(chunk_ent, rosd_chunk_req_info, ql);
-            if (id->cli_src == qi->cli_lp &&
-                    id->cli_op_id == qi->cli_cb.op_index){
-                break;
-            }
-        }
-        assert(chunk_ent != &ns->pending_chunk_ops);
-        qlist_del(chunk_ent);
-        free(id);
-    }
-#endif
-
     lprintf("%lu: new req rc id:%d from %lu\n", lp->gid, qi->op_id, qi->cli_lp);
     qlist_del(qitem_ent);
     rosd_pipeline_destroy(qi->req);
@@ -1348,7 +1308,6 @@ void handle_pipeline_alloc_callback_rc(
         }
         else {
             ns->bytes_read_local -= qi->req->committed;
-            ns->bytes_returned -= qi->req->forwarded;
         }
         lprintf("%lu: add req %d (alloc_callback rc)\n", lp->gid, qi->op_id);
     }
@@ -1670,10 +1629,6 @@ void handle_complete_chunk_send_rc(
         resource_lp_free_rc(lp);
         if (b->c2)
             triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
-        if (b->c1) {
-            ns->bytes_read_local -= qi->req->committed;
-            ns->bytes_returned -= qi->req->forwarded;
-        }
     }
     else {
         qi->req->rem += t->chunk_size;

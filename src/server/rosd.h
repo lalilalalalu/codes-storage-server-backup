@@ -138,11 +138,6 @@ struct triton_rosd_state {
     // list of pending pipeline operations (indexed by operation id)
     struct qlist_head pending_pipeline_ops;
     struct rc_stack * finished_pipeline_ops;
-    // non-primary servers: list of full request sizes and chunks processed
-    // for all_recv protocol (chain - client ack'ing, fan - server acking)
-    // indexed by pair of operation id and src LP
-    struct qlist_head pending_chunk_ops;
-    struct rc_stack * finished_chunk_ops;
 
     // all servers: list of open / metadata-only calls (ie those that don't
     // need to go through the buffer allocation / threading process)
@@ -157,18 +152,8 @@ struct triton_rosd_state {
     // stats: bytes 
     // - written locally 
     // - read locally 
-    // - sent to other servers (writes)
-    // - sent to clients (read) 
-    // - per server forwards
-    // TODO: include data on acks?
     unsigned long bytes_written_local;
     unsigned long bytes_read_local;
-    unsigned long bytes_forwarded;
-    unsigned long bytes_returned;
-    unsigned long *bytes_fwd_svrs;
-
-    // scratch space for placement calculations
-    unsigned long *oid_srv_map;
 
     // number of errors we have encountered (for self-suspend)
     int error_ct;
@@ -176,15 +161,6 @@ struct triton_rosd_state {
     // scratch output buffer (for lpio)
     char output_buf[256];
 };
-
-// q item for pending_chunk_ops
-typedef struct rosd_chunk_req_info {
-    tw_lpid cli_src; // client lp, used for identification
-    int cli_op_id;   // client op id, used for identification
-    uint64_t total;     // total data requested
-    uint64_t received;  // total data received (for recv-based protos)
-    struct qlist_head ql;
-} rosd_chunk_req_info;
 
 // registers the lp type with ross
 void rosd_register();
