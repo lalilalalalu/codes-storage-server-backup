@@ -172,10 +172,8 @@ void rosd_configure(){
 void triton_rosd_init(triton_rosd_state *ns, tw_lp *lp) {
     ns->server_index = get_rosd_index(lp->gid);
 
-    INIT_QLIST_HEAD(&ns->pending_pipeline_ops);
-    rc_stack_create(&ns->finished_pipeline_ops);
-    INIT_QLIST_HEAD(&ns->pending_meta_ops);
-    rc_stack_create(&ns->finished_meta_ops);
+    INIT_QLIST_HEAD(&ns->pending_ops);
+    rc_stack_create(&ns->finished_ops);
 
     ns->op_idx_pl = 0;
 }
@@ -197,7 +195,7 @@ void triton_rosd_event_handler(
     }
 
     /* perform a garbage collection */
-    rc_stack_gc(lp, 1, ns->finished_pipeline_ops);
+    rc_stack_gc(lp, 1, ns->finished_ops);
 
     switch (m->h.event_type){
         case RECV_CLI_REQ:
@@ -265,11 +263,11 @@ void triton_rosd_event_handler_rc(
 }
 
 void triton_rosd_finalize(triton_rosd_state *ns, tw_lp *lp) {
-    rc_stack_destroy(1, ns->finished_pipeline_ops);
+    rc_stack_destroy(1, ns->finished_ops);
 
     // check for pending operations that did not complete or were not removed
     struct qlist_head *ent;
-    qlist_for_each(ent, &ns->pending_pipeline_ops){
+    qlist_for_each(ent, &ns->pending_ops){
         rosd_qitem *qi = qlist_entry(ent, rosd_qitem, ql);
         fprintf(stderr, "WARNING: LP %lu with incomplete qitem "
                 "(cli lp %lu, op id %d)\n",
@@ -278,8 +276,7 @@ void triton_rosd_finalize(triton_rosd_state *ns, tw_lp *lp) {
     int written = 0;
     if (ns->server_index == 0){
         written = sprintf(ns->output_buf, 
-                "# Format: <server id> <LP id> bytes <read> <written> "
-                "<returned (client rd)> <forwarded>"
+                "# Format: <server id> <LP id> bytes <read> <written>"
 #if ROSD_PRINT_RNG == 1
                 " <rng model> <rng codes>"
 #endif
@@ -355,7 +352,6 @@ void handle_recv_io_req(
     if (m->u.creq.req.req_type == REQ_OPEN) {
         tw_event *e_local;
         triton_rosd_msg *m_local;
-        // FORWARDING triton_rosd_msg m_fwd;
         rosd_callback_id cb_id;
         rosd_qitem *qm = malloc(sizeof(*qm));
         assert(qm);
@@ -379,7 +375,7 @@ void handle_recv_io_req(
         tw_event_send(e_local);
 
         // go ahead and push the partially complete op
-        qlist_add_tail(&qm->ql, &ns->pending_meta_ops);
+        qlist_add_tail(&qm->ql, &ns->pending_ops);
 
         return;
     }
@@ -398,7 +394,7 @@ void handle_recv_io_req(
     qi->cli_cb = m->u.creq.callback;
 
     lprintf("%lu: new req id:%d from %lu\n", lp->gid, qi->op_id, qi->cli_lp);
-    qlist_add_tail(&qi->ql, &ns->pending_pipeline_ops);
+    qlist_add_tail(&qi->ql, &ns->pending_ops);
 
     // send the initial allocation event 
     pipeline_alloc_event(b, lp, qi->op_id, qi->preq);
@@ -423,13 +419,13 @@ void handle_pipeline_alloc_callback(
     // find the corresponding operation
     struct qlist_head *ent = NULL;
     rosd_qitem *qi = NULL; 
-    qlist_for_each(ent, &ns->pending_pipeline_ops){
+    qlist_for_each(ent, &ns->pending_ops){
         qi = qlist_entry(ent, rosd_qitem, ql);
         if (qi->op_id == m->u.palloc_callback.id.op_id){
             break;
         }
     }
-    if (ent == &ns->pending_pipeline_ops){
+    if (ent == &ns->pending_ops){
         int written = sprintf(ns->output_buf, 
                 "ERROR: pipeline op with id %d not found", 
                 m->u.palloc_callback.id.op_id);
@@ -565,7 +561,7 @@ void handle_pipeline_alloc_callback(
             }
             lprintf("%lu: rm req %d (alloc_callback)\n", lp->gid, qi->op_id);
             // RC: hold on to queued-up item (TODO: mem mgmt)
-            rc_stack_push(lp, qi, ns->finished_pipeline_ops);
+            rc_stack_push(lp, qi, ns->finished_ops);
             b->c3 = 1;
         }
         return;
@@ -588,13 +584,13 @@ void handle_recv_chunk(
     // first look up pipeline request
     struct qlist_head *ent = NULL;
     rosd_qitem *qi = NULL; 
-    qlist_for_each(ent, &ns->pending_pipeline_ops){
+    qlist_for_each(ent, &ns->pending_ops){
         qi = qlist_entry(ent, rosd_qitem, ql);
         if (qi->op_id == m->u.recv_chunk.id.op_id){
             break;
         }
     }
-    if (ent == &ns->pending_pipeline_ops){
+    if (ent == &ns->pending_ops){
         int written = sprintf(ns->output_buf, 
                 "ERROR: pipeline op with id %d not found (chunk recv)", 
                 m->u.recv_chunk.id.op_id);
@@ -659,13 +655,13 @@ static void handle_async_meta_completion(
     // find the meta op
     struct qlist_head *ent = NULL;
     rosd_qitem *qi = NULL;
-    qlist_for_each(ent, &ns->pending_meta_ops){
+    qlist_for_each(ent, &ns->pending_ops){
         qi = qlist_entry(ent, rosd_qitem, ql);
         if (qi->op_id == id){
             break;
         }
     }
-    if (ent == &ns->pending_meta_ops){
+    if (ent == &ns->pending_ops){
         int written = sprintf(ns->output_buf,
                 "ERROR: meta op with id %d not found on LP %lu "
                 "(async_meta_completion,%s)", id, lp->gid,
@@ -680,7 +676,7 @@ static void handle_async_meta_completion(
 
     // this op is done, get "rid" of it
     qlist_del(&qi->ql);
-    rc_stack_push(lp, qi, ns->finished_meta_ops);
+    rc_stack_push(lp, qi, ns->finished_ops);
 }
 
 // bitfields used:
@@ -700,13 +696,13 @@ static void handle_async_completion(
     // find the pipeline op
     struct qlist_head *ent = NULL;
     rosd_qitem *qi = NULL; 
-    qlist_for_each(ent, &ns->pending_pipeline_ops){
+    qlist_for_each(ent, &ns->pending_ops){
         qi = qlist_entry(ent, rosd_qitem, ql);
         if (qi->op_id == id->op_id){
             break;
         }
     }
-    if (ent == &ns->pending_pipeline_ops){
+    if (ent == &ns->pending_ops){
         int written = sprintf(ns->output_buf, 
                 "ERROR: pipeline op with id %d not found on LP %lu (async_completion,%s)", 
                 id->op_id, lp->gid,
@@ -773,7 +769,7 @@ static void handle_async_completion(
                         m->h.event_type==COMPLETE_DISK_OP ? "disk":"fwd");
                 qlist_del(&qi->ql);
                 ns->bytes_written_local += p->committed;
-                rc_stack_push(lp, qi, ns->finished_pipeline_ops);
+                rc_stack_push(lp, qi, ns->finished_ops);
                 b->c4 = 1;
             }
         }
@@ -836,13 +832,13 @@ void handle_complete_chunk_send(
     struct qlist_head *ent = NULL;
     rosd_qitem *qi = NULL;
     rosd_callback_id id = m->u.complete_chunk_send.id;
-    qlist_for_each(ent, &ns->pending_pipeline_ops){
+    qlist_for_each(ent, &ns->pending_ops){
         qi = qlist_entry(ent, rosd_qitem, ql);
         if (qi->op_id == id.op_id){
             break;
         }
     }
-    if (ent == &ns->pending_pipeline_ops){
+    if (ent == &ns->pending_ops){
         int written = sprintf(ns->output_buf,
                 "ERROR: pipeline op with id %d not found on LP %lu "
                 "(complete_chunk_send)",
@@ -887,7 +883,7 @@ void handle_complete_chunk_send(
             ns->bytes_read_local += p->committed;
             lprintf("%lu: rm op %d (compl chunk send)\n", lp->gid, qi->op_id);
             qlist_del(&qi->ql);
-            rc_stack_push(lp, qi, ns->finished_pipeline_ops);
+            rc_stack_push(lp, qi, ns->finished_ops);
         }
         // else other threads still running, do nothing
     }
@@ -951,13 +947,13 @@ void handle_recv_io_req_rc(
         // find the related request or die trying
         rosd_qitem *qm = NULL;
         struct qlist_head *ent;
-        assert(!qlist_empty(&ns->pending_meta_ops));
-        qlist_for_each(ent, &ns->pending_meta_ops) {
+        assert(!qlist_empty(&ns->pending_ops));
+        qlist_for_each(ent, &ns->pending_ops) {
             qm = qlist_entry(ent, rosd_qitem, ql);
             if (qm->op_id == op_id_prev)
                 break;
         }
-        assert(ent != &ns->pending_meta_ops);
+        assert(ent != &ns->pending_ops);
         qlist_del(ent);
 
         lsm_event_new_reverse(lp);
@@ -970,13 +966,13 @@ void handle_recv_io_req_rc(
     // pushes it back to the back, so we have to iterate)
     struct qlist_head *qitem_ent;
     rosd_qitem *qi = NULL;
-    qlist_for_each(qitem_ent, &ns->pending_pipeline_ops){
+    qlist_for_each(qitem_ent, &ns->pending_ops){
         qi = qlist_entry(qitem_ent, rosd_qitem, ql);
         if (qi->op_id == op_id_prev){
             break;
         }
     }
-    assert(qitem_ent != &ns->pending_pipeline_ops);
+    assert(qitem_ent != &ns->pending_ops);
 
     // before doing cleanups (free(...)), reverse the alloc event
     pipeline_alloc_event_rc(b, lp, op_id_prev, qi->preq);
@@ -1001,9 +997,9 @@ void handle_pipeline_alloc_callback_rc(
     // find the request 
     rosd_qitem *qi = NULL;
     if (b->c3){
-        qi = rc_stack_pop(ns->finished_pipeline_ops);
+        qi = rc_stack_pop(ns->finished_ops);
         // add back into the queue
-        qlist_add_tail(&qi->ql, &ns->pending_pipeline_ops);
+        qlist_add_tail(&qi->ql, &ns->pending_ops);
         // undo the stats
         if (qi->req.req_type == REQ_WRITE) {
             ns->bytes_written_local -= qi->preq->committed;
@@ -1015,13 +1011,13 @@ void handle_pipeline_alloc_callback_rc(
     }
     else{
         struct qlist_head *ent = NULL;
-        qlist_for_each(ent, &ns->pending_pipeline_ops){
+        qlist_for_each(ent, &ns->pending_ops){
             qi = qlist_entry(ent, rosd_qitem, ql);
             if (qi->op_id == m->u.palloc_callback.id.op_id){
                 break;
             }
         }
-        assert(ent != &ns->pending_pipeline_ops);
+        assert(ent != &ns->pending_ops);
     }
     
     int tid = m->u.palloc_callback.id.tid;
@@ -1077,13 +1073,13 @@ void handle_recv_chunk_rc(
     // first look up pipeline request
     struct qlist_head *ent = NULL;
     rosd_qitem *qi = NULL; 
-    qlist_for_each(ent, &ns->pending_pipeline_ops){
+    qlist_for_each(ent, &ns->pending_ops){
         qi = qlist_entry(ent, rosd_qitem, ql);
         if (qi->op_id == m->u.recv_chunk.id.op_id){
             break;
         }
     }
-    assert(ent != &ns->pending_pipeline_ops);
+    assert(ent != &ns->pending_ops);
 
     lsm_event_new_reverse(lp);
 
@@ -1102,20 +1098,20 @@ static void handle_async_meta_completion_rc(
 
     rosd_qitem *qi;
     if (b->c0) {
-        qi = rc_stack_pop(ns->finished_meta_ops);
+        qi = rc_stack_pop(ns->finished_ops);
         assert(qi != NULL);
     }
     else {
         struct qlist_head *ent;
-        qlist_for_each(ent, &ns->pending_meta_ops) {
+        qlist_for_each(ent, &ns->pending_ops) {
             qi = qlist_entry(ent, rosd_qitem, ql);
             if (qi->op_id == id)
                 break;
         }
-        assert(ent != &ns->pending_meta_ops);
+        assert(ent != &ns->pending_ops);
     }
 
-    qlist_add_tail(&qi->ql, &ns->pending_meta_ops);
+    qlist_add_tail(&qi->ql, &ns->pending_ops);
 
     triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
 }
@@ -1134,22 +1130,22 @@ static void handle_async_completion_rc(
     rosd_qitem *qi = NULL;
     if (b->c4){
         // request was "deleted", put back into play
-        qi = rc_stack_pop(ns->finished_pipeline_ops);
+        qi = rc_stack_pop(ns->finished_ops);
         lprintf("%lu: add op %d (async compl %s rc)\n", lp->gid, qi->op_id,
                 m->h.event_type==COMPLETE_DISK_OP ? "disk" : "fwd");
-        qlist_add_tail(&qi->ql, &ns->pending_pipeline_ops);
+        qlist_add_tail(&qi->ql, &ns->pending_ops);
         // undo the stats
         ns->bytes_written_local -= qi->preq->committed;
     }
     else{
         struct qlist_head *ent = NULL;
-        qlist_for_each(ent, &ns->pending_pipeline_ops){
+        qlist_for_each(ent, &ns->pending_ops){
             qi = qlist_entry(ent, rosd_qitem, ql);
             if (qi->op_id == id->op_id){
                 break;
             }
         }
-        assert(ent != &ns->pending_pipeline_ops);
+        assert(ent != &ns->pending_ops);
     }
 
     rosd_pipelined_req *p = qi->preq;
@@ -1234,21 +1230,21 @@ void handle_complete_chunk_send_rc(
 
     if (b->c1) {
         // request was "deleted", put back into play
-        qi = rc_stack_pop(ns->finished_pipeline_ops);
+        qi = rc_stack_pop(ns->finished_ops);
         lprintf("%lu: add op %d (compl chunk send rc)\n", lp->gid, qi->op_id);
-        qlist_add_tail(&qi->ql, &ns->pending_pipeline_ops);
+        qlist_add_tail(&qi->ql, &ns->pending_ops);
         // undo the stats
         ns->bytes_read_local -= qi->preq->committed;
     }
     else{
         struct qlist_head *ent = NULL;
-        qlist_for_each(ent, &ns->pending_pipeline_ops){
+        qlist_for_each(ent, &ns->pending_ops){
             qi = qlist_entry(ent, rosd_qitem, ql);
             if (qi->op_id == id.op_id){
                 break;
             }
         }
-        assert(ent != &ns->pending_pipeline_ops);
+        assert(ent != &ns->pending_ops);
     }
 
     rosd_pipelined_req *p = qi->preq;

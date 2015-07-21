@@ -118,14 +118,8 @@ struct triton_rosd_state {
     // my logical (not lp) id
     int server_index;
 
-    // list of pending pipeline operations (indexed by operation id)
-    struct qlist_head pending_pipeline_ops;
-    struct rc_stack * finished_pipeline_ops;
-
-    // all servers: list of open / metadata-only calls (ie those that don't
-    // need to go through the buffer allocation / threading process)
-    struct qlist_head pending_meta_ops;
-    struct rc_stack * finished_meta_ops;
+    struct qlist_head pending_ops;
+    struct rc_stack * finished_ops;
 
     // unique (not reused on reverse-comp) identifiers for
     // requests
