@@ -47,7 +47,6 @@ int rosd_magic = 0;
 extern int model_net_id;
 
 /* system parameters */
-static int num_servers;
 static int num_threads = 4;
 static int pipeline_unit_size = (1<<22);
 
@@ -197,10 +196,6 @@ void rosd_configure(){
     bj_hashlittle2(ROSD_LP_NM, strlen(ROSD_LP_NM), &h1, &h2);
     rosd_magic = h1+h2;
 
-    /* get the number of servers by querying codes-mapping */
-    // TODO: be annotation-aware
-    num_servers = codes_mapping_get_lp_count(NULL, 0, ROSD_LP_NM, NULL, 1);
-
     /* until we get rid of RF logic... */
     int rc;
 
@@ -220,7 +215,6 @@ void rosd_configure(){
 
 void triton_rosd_init(triton_rosd_state *ns, tw_lp *lp) {
     ns->server_index = get_rosd_index(lp->gid);
-    assert(ns->server_index < num_servers);
 
     INIT_QLIST_HEAD(&ns->pending_pipeline_ops);
     rc_stack_create(&ns->finished_pipeline_ops);
