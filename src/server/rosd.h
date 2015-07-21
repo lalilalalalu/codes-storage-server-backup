@@ -167,39 +167,6 @@ void rosd_register();
 // configures the lp given the global config object
 void rosd_configure();
 
-/// Protocol options
-// X macro for forwarding modes
-// format: enum, id string
-#define FWD_MODES \
-    X(FWD_CHAIN, "chain")\
-    X(FWD_FAN,   "fan")\
-    X(NUM_FWD_MODES, NULL)
-    
-
-// X macro for acking modes
-// format: enum, id string
-#define ACK_MODES \
-    X(ACK_PRIMARY_RECV,   "primary_recv")\
-    X(ACK_PRIMARY_COMMIT, "primary_commit")\
-    X(ACK_ALL_RECV,       "all_recv")\
-    X(ACK_ALL_COMMIT,     "all_commit")\
-    X(NUM_ACK_MODES,     NULL)
-
-#define X(a,b) a,
-typedef enum {
-    FWD_MODES
-} rosd_fwd_mode;
-
-typedef enum {
-    ACK_MODES
-} rosd_ack_mode;
-#undef X
-
-// forwarding utilities
-int rosd_get_fwd_mode(char const * mode, rosd_fwd_mode *f);
-int rosd_get_ack_mode(char const * mode, rosd_ack_mode *a);
-int is_rosd_valid_fwd_config(rosd_fwd_mode f, rosd_ack_mode a);
-
 #endif
 
 /*
