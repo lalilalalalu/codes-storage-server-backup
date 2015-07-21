@@ -110,17 +110,11 @@ struct rosd_pipeline_qitem {
     int op_id;
     // request type (either read or write for the time being)
     enum request_type type;
-    // position in forwarding chain
-    int chain_pos;
     // must store both the client and the actual source, for the case when we
     // send an ack to the client from a non-primary server (all_recv+chain)
-    tw_lpid cli_lp, src_lp;
+    tw_lpid cli_lp;
     triton_cli_callback cli_cb;  // for client-server reqs
-    rosd_callback_id    rosd_cb; // for server-server reqs
     rosd_pipelined_req *req;
-    // status of data recv (strictly for fan+all_recv protocol)
-    int recv_status_ct;
-    char recv_status[MAX_REPLICATION];
     // i'm part of a linked list
     struct qlist_head ql;
 };
@@ -133,7 +127,6 @@ struct rosd_meta_qitem {
     // send an ack to the client from a non-primary server (all_recv+chain)
     tw_lpid cli_lp;
     triton_cli_callback cli_cb;  // for client-server reqs
-    rosd_callback_id    rosd_cb; // for server-server reqs
     struct qlist_head ql;
 };
 

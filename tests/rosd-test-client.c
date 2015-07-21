@@ -114,7 +114,7 @@ static void test_client_event_rc(
         case TEST_CLI_ACK:
             printf("%lu: received ack (rc)\n", lp->gid);
             if (b->c0) {
-                next_rc(1, ns, m, lp);
+                next_rc(0, ns, m, lp);
                 ns->num_complete_rd--;
             }
             else {
@@ -146,8 +146,12 @@ static void test_client_finalize(
         struct test_client_state *ns,
         tw_lp *lp)
 {
-    assert(ns->num_complete_wr == num_reqs);
-    assert(ns->num_complete_rd == num_reqs);
+    if (ns->num_complete_wr != num_reqs)
+        tw_error(TW_LOC, "num_complete_wr:%d does not match num_reqs:%d\n",
+                ns->num_complete_wr, num_reqs);
+    if (ns->num_complete_rd != num_reqs)
+        tw_error(TW_LOC, "num_complete_rd:%d does not match num_reqs:%d\n",
+                ns->num_complete_rd, num_reqs);
 }
 
 tw_lptype test_client_lp = {

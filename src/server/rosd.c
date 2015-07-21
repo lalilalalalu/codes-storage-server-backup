@@ -549,56 +549,17 @@ void handle_recv_io_req(
     // initialize a pipelining operation
     rosd_pipeline_qitem *qi = malloc(sizeof(rosd_pipeline_qitem)); 
     qi->op_id = ns->op_idx_pl++;
-    qi->src_lp = m->h.src;
 
-    if (m->h.event_type == RECV_CLI_REQ) {
-        // save op id for rc
-        m->u.creq.rc.op_id = qi->op_id;
-        // client->server request - full pipeline
-        qi->cli_lp = m->h.src;
-        qi->req = rosd_pipeline_init(num_threads, pipeline_unit_size,
-                &m->u.creq.req, &m->u.creq.callback);
-        qi->chain_pos = 0;
-        qi->cli_cb = m->u.creq.callback;
-        qi->type = m->u.creq.req.req_type;
-    }
-#if 0
-    NO SERVER-SERVER OPS
-    else{
-        // in the server-server case, we're using a one thread 'pipeline' to
-        // use the same code path
-        m->u.sreq.rc.op_id = qi->op_id;
-        qi->cli_lp = m->u.sreq.callback.header.src;
-        qi->req = rosd_pipeline_init(1, pipeline_unit_size,
-                &m->u.sreq.req, &m->u.sreq.callback);
-        qi->chain_pos = m->u.sreq.chain_pos;
-        qi->cli_cb = m->u.sreq.callback;
-        qi->rosd_cb = m->u.sreq.id;
-        qi->type = m->u.sreq.req.req_type;
-        // in addition, search for or init the chunk request
-        // NOTE: use the *client's* lp and op id as the identifier - op id's in 
-        // non primaries are not request specific
-        struct qlist_head *ent;
-        rosd_chunk_req_info *id;
-        qlist_for_each(ent, &ns->pending_chunk_ops){
-            id = qlist_entry(ent, rosd_chunk_req_info, ql);
-            if (id->cli_src == qi->cli_lp &&
-                    id->cli_op_id == qi->cli_cb.op_index){
-                break;
-            }
-        }
-        if (ent == &ns->pending_chunk_ops){
-            id = malloc(sizeof(rosd_chunk_req_info));
-            id->cli_src = qi->cli_lp;
-            id->cli_op_id = qi->cli_cb.op_index;
-            id->total = m->u.sreq.total_req_sz;
-            id->received = 0;
-            qlist_add_tail(&id->ql, &ns->pending_chunk_ops);
-            b->c0 = 1;
-        }
-    }
-#endif
-    lprintf("%lu: new req id:%d from %lu\n", lp->gid, qi->op_id, qi->src_lp);
+    // save op id for rc
+    m->u.creq.rc.op_id = qi->op_id;
+    // client->server request - full pipeline
+    qi->cli_lp = m->h.src;
+    qi->req = rosd_pipeline_init(num_threads, pipeline_unit_size,
+            &m->u.creq.req, &m->u.creq.callback);
+    qi->cli_cb = m->u.creq.callback;
+    qi->type = m->u.creq.req.req_type;
+
+    lprintf("%lu: new req id:%d from %lu\n", lp->gid, qi->op_id, qi->cli_lp);
     qlist_add_tail(&qi->ql, &ns->pending_pipeline_ops);
 
     // send the initial allocation event 
@@ -679,7 +640,7 @@ void handle_pipeline_alloc_callback(
             int prio = 0;
             model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
                     (void*) &prio);
-            model_net_pull_event(model_net_id, "rosd", qi->src_lp,
+            model_net_pull_event(model_net_id, "rosd", qi->cli_lp,
                     sz, 0.0, sizeof(triton_rosd_msg), &m_recv, lp);
         }
         else if (qi->type == REQ_READ) {
@@ -767,7 +728,6 @@ void handle_pipeline_alloc_callback(
             }
             else {
                 ns->bytes_read_local += qi->req->committed;
-                ns->bytes_returned += qi->req->forwarded;
             }
             lprintf("%lu: rm req %d (alloc_callback)\n", lp->gid, qi->op_id);
             // RC: hold on to queued-up item (TODO: mem mgmt)
@@ -823,29 +783,6 @@ void handle_recv_chunk(
         return;
     }
 
-    // get the chunk request metadata and update the received bytes information
-    rosd_chunk_req_info *info = NULL;
-    struct qlist_head *chunk_ent = NULL;
-    if (qi->cli_lp != qi->src_lp){
-        qlist_for_each(chunk_ent, &ns->pending_chunk_ops){
-            info = qlist_entry(chunk_ent, rosd_chunk_req_info, ql);
-            if (info->cli_src == qi->cli_lp && 
-                    info->cli_op_id == qi->cli_cb.op_index) {
-                info->received += t->chunk_size;
-                break;
-            }
-        }
-        if (chunk_ent == &ns->pending_chunk_ops){
-            int written = sprintf(ns->output_buf, 
-                    "ERROR: chunk op for cli req of lp %lu, id %lu "
-                    "not found on LP %lu (recv_chunk)", 
-                    qi->cli_lp, qi->cli_cb.op_index, lp->gid);
-            lp_io_write(lp->gid, "errors", written, ns->output_buf);
-            ns->error_ct = 1;
-            return;
-        }
-    }
-    
     lprintf("%lu: received chunk from %lu\n", lp->gid, m->h.src);
 
     qi->req->received += t->chunk_size;
@@ -872,123 +809,6 @@ void handle_recv_chunk(
     m_store->u.complete_sto.id.tid = tid;
     m_store->u.complete_sto.is_data_op = 1;
     tw_event_send(e_store);
-
-#if 0
-    THIS IS ALL ABOUT REPLICATION
-    // multiple acks/forwards can happen here
-    MN_START_SEQ();
-
-    // completion event: primary has received all of clients data in
-    // primary_recv mode, causing an ack
-    if (info == NULL && qi->req->received == qi->req->req.xfer_size &&
-            ack_mode == ACK_PRIMARY_RECV){
-        lprintf("%lu: acking to %lu\n", lp->gid, qi->cli_cb.header.src);
-        triton_send_response(&qi->cli_cb, &qi->req->req, lp,
-                model_net_id, ROSD_REQ_CONTROL_SZ, 0);
-        b->c0 = 1;
-    }
-    // completion event: non-primary has received all of client's data
-    else if (info != NULL && info->received == info->total) {
-        b->c1 = 1;
-        // If we're in chain+all-recv mode, then we can ack to the client
-        // If in fan mode, then we need to send an explicit data-recv ack. 
-        // In both cases, we remove the req metadata
-        if (ack_mode == ACK_ALL_RECV){
-            if (fwd_mode == FWD_CHAIN && 
-                    qi->chain_pos == replication_factor-1){
-                lprintf("%lu: acking to %lu\n", lp->gid, qi->cli_cb.header.src);
-                triton_send_response(&qi->cli_cb, &qi->req->req, lp,
-                        model_net_id, ROSD_REQ_CONTROL_SZ, 0);
-                b->c2 = 1;
-            }
-            // if non-primary AND in fan mode AND acking with all_recv, then
-            // explicit ack the parent (for fan+all_recv, no others need this
-            // at the moment)
-            else if (fwd_mode == FWD_FAN && qi->chain_pos != 0){
-                triton_rosd_msg m_ack;
-                msg_set_header(rosd_magic, RECV_DATA_ACK, lp->gid, &m_ack.h);
-                m_ack.u.recv_data_ack.op_id = qi->rosd_cb.op_id;
-                m_ack.u.recv_data_ack.chain_pos = qi->chain_pos;
-                //char * cat = "srv-chunk-ack";
-                int prio = 0;
-                model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
-                        (void*) &prio);
-                model_net_event(model_net_id, "rosd", qi->src_lp,
-                        ROSD_REQ_CONTROL_SZ, 0.0, sizeof(m_ack), &m_ack,
-                        0, NULL, lp);
-                lprintf("%lu: fan+all_recv ack to %lu (cli %lu, op %lu) "
-                        "at %1.5e\n",
-                        lp->gid, qi->src_lp, qi->cli_lp, qi->cli_cb.op_index,
-                        tw_now(lp));
-                b->c3 = 1;
-            }
-        }
-        qlist_del(chunk_ent);
-        rc_stack_push(lp, info, ns->finished_chunk_ops);
-    }
-
-    // forward the chunk to the next server
-    // chain: next in line unless tail
-    // fan:   primary forwards all
-    int do_chain_fwd = 
-        (fwd_mode == FWD_CHAIN && qi->chain_pos < replication_factor-1);
-    int do_fan_fwd = (fwd_mode == FWD_FAN && qi->chain_pos == 0);
-    triton_rosd_msg m_req;
-    if (do_chain_fwd || do_fan_fwd){
-        msg_set_header(rosd_magic, RECV_SRV_REQ, lp->gid, &m_req.h);
-        // set up offset/length parameters
-        // chain pos = 0 - off/len deps on chunk
-        if (qi->chain_pos == 0){
-            m_req.u.sreq.req.xfer_offset = t->chunk_id * qi->req->punit_size +
-                qi->req->req.xfer_offset;
-            m_req.u.sreq.req.xfer_size = t->chunk_size;
-        }
-        // chain pos > 0 - off/len already in req
-        else{
-            m_req.u.sreq.req.xfer_offset = qi->req->req.xfer_offset;
-            m_req.u.sreq.req.xfer_size = qi->req->req.xfer_size;
-        }
-        // set up rest of req
-        m_req.u.sreq.req.req_type = qi->req->req.req_type;
-        m_req.u.sreq.req.create = qi->req->req.create;
-        m_req.u.sreq.req.oid = qi->req->req.oid;
-        // set up everything else
-        m_req.u.sreq.callback = qi->cli_cb;
-        // req sz - non-primary gets from chunk metadata 
-        m_req.u.sreq.total_req_sz = 
-            (qi->chain_pos==0) ? qi->req->req.xfer_size : info->total;
-        m_req.u.sreq.id.op_id = qi->op_id;
-        m_req.u.sreq.id.tid = tid;
-        // use the placement, luke
-        placement_find_closest(m_req.u.sreq.req.oid, replication_factor,
-                ns->oid_srv_map);
-        int num_fwds = do_chain_fwd ? 1 : replication_factor-1;
-        for (int i = 1; i <= num_fwds; i++){
-            tw_lpid dst = get_rosd_lpid((int)ns->oid_srv_map[i+qi->chain_pos]);
-            m_req.u.sreq.chain_pos = i+qi->chain_pos;
-            //char * cat = "srv-chunk-req";
-            int prio = 0;
-            model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
-                    (void*) &prio);
-            model_net_event(model_net_id, "rosd", dst,
-                    ROSD_REQ_CONTROL_SZ, 0.0, sizeof(m_req), &m_req,
-                    0, NULL, lp);
-            lprintf("%lu: forward req to %lu\n", lp->gid, dst);
-        }
-    }
-    // else set forwarding status for thread to a dummy
-    else if (fwd_mode == FWD_CHAIN){
-        t->status.fwd_status_ct = 1;
-    }
-    else{
-        t->status.fwd_status_ct = replication_factor-1;
-        for (int i = 1; i <= replication_factor-1; i++){
-            t->status.fwd_status[i]=1;
-        }
-    }
-
-    MN_END_SEQ();
-#endif
 }
 
 // bitfields used:
@@ -1040,15 +860,7 @@ static void handle_async_completion(
         triton_rosd_msg * m,
         tw_lp * lp){
     rosd_callback_id *id;
-    if (m->h.event_type == COMPLETE_DISK_OP){
-        id = &m->u.complete_sto.id;
-    }
-#if 0
-    FORWARDING CHECK
-    else{
-        id = &m->u.chunk_ack.id;
-    }
-#endif
+    id = &m->u.complete_sto.id;
 
     // find the pipeline op
     struct qlist_head *ent = NULL;
@@ -1069,83 +881,22 @@ static void handle_async_completion(
         return;
     }
 
-    MN_START_SEQ();
-
     rosd_pipelined_thread *t = &qi->req->threads[id->tid];
 
-    // update the status
-    if (m->h.event_type == COMPLETE_DISK_OP){
-        if (t->status.local_status > 0){
-            int written = sprintf(ns->output_buf,
-                    "ERROR: LP %lu duplicate storage acks "
-                    "(op_id %d, thread %d)\n",
-                    lp->gid, qi->op_id, id->tid);
-            lp_io_write(lp->gid, "errors", written, ns->output_buf);
-            ns->error_ct = 1;
-            return;
-        }
-        t->status.local_status++;
-        lprintf("%lu: commited:%lu+%lu\n", lp->gid, qi->req->committed,
-                t->chunk_size);
-        qi->req->committed += t->chunk_size;
+    lprintf("%lu: committed:%lu+%lu\n", lp->gid, qi->req->committed,
+            t->chunk_size);
+    qi->req->committed += t->chunk_size;
         // completion condition - primary_commit and all data has been
         // committed
-        if (qi->type == REQ_WRITE &&
-#if 0
-                ack_mode == ACK_PRIMARY_COMMIT && qi->chain_pos == 0 &&
-#endif
-                qi->req->committed == qi->req->req.xfer_size){
-            b->c0 = 1;
-            triton_send_response(&qi->cli_cb, &qi->req->req, lp,
-                    model_net_id, ROSD_REQ_CONTROL_SZ, 0);
-        }
-        // go ahead and set the rc variables, just in case
-        m->u.complete_sto.rc.chunk_id = t->chunk_id;
-        m->u.complete_sto.rc.chunk_size = t->chunk_size;
+    if (qi->type == REQ_WRITE &&
+            qi->req->committed == qi->req->req.xfer_size){
+        b->c0 = 1;
+        triton_send_response(&qi->cli_cb, &qi->req->req, lp,
+                model_net_id, ROSD_REQ_CONTROL_SZ, 0);
     }
-#if 0
-    ALL FORWARDING
-    else{
-        assert(qi->type != REQ_READ);
-        if (fwd_mode == FWD_CHAIN){
-            if (t->status.fwd_status_ct > 0){
-                int written = sprintf(ns->output_buf,
-                        "ERROR: LP %lu duplicate forwarding acks "
-                        "(op_id %d, thread %d)\n",
-                        lp->gid, qi->op_id, id->tid);
-                lp_io_write(lp->gid, "errors", written, ns->output_buf);
-                ns->error_ct = 1;
-                return;
-            }
-            t->status.fwd_status_ct++;
-            qi->req->forwarded += t->chunk_size;
-        }
-        else if (fwd_mode == FWD_FAN){
-            int chain_pos_src = m->u.chunk_ack.chain_pos;
-            assert(chain_pos_src > 0 && chain_pos_src < MAX_REPLICATION);
-            if (t->status.fwd_status[chain_pos_src] > 0){
-                int written = sprintf(ns->output_buf,
-                        "ERROR: LP %lu duplicate forwarding acks "
-                        "(op_id %d, thread %d)\n",
-                        lp->gid, qi->op_id, id->tid);
-                lp_io_write(lp->gid, "errors", written, ns->output_buf);
-                ns->error_ct = 1;
-                return;
-            }
-            else{
-                t->status.fwd_status[chain_pos_src] = 1;
-                t->status.fwd_status_ct++;
-                // only count as forwarded when we get response from all in fan
-                if (t->status.fwd_status_ct == replication_factor-1){
-                    qi->req->forwarded += t->chunk_size;
-                }
-            }
-        }
-        // go ahead and set the rc variables, just in case
-        m->u.chunk_ack.rc.chunk_id = t->chunk_id;
-        m->u.chunk_ack.rc.chunk_size = t->chunk_size;
-    }
-#endif
+    // go ahead and set the rc variables, just in case
+    m->u.complete_sto.rc.chunk_id = t->chunk_id;
+    m->u.complete_sto.rc.chunk_size = t->chunk_size;
 
     if (qi->type == REQ_READ){
         /* send to client without a remote message and with a local "chunk
@@ -1157,134 +908,74 @@ static void handle_async_completion(
                 0, NULL, sizeof(m_loc), &m_loc, lp);
     }
     else {
-        // check if chunk has been fully processed
-#if 0
-        int is_chunk_op_complete = t->status.local_status && 
-            ((fwd_mode == FWD_CHAIN) ? (t->status.fwd_status_ct == 1)
-             : (t->status.fwd_status_ct == replication_factor-1));
-#endif
-        int is_chunk_op_complete = t->status.local_status;
+        // three cases to consider:
+        // - thread can pull more work from src
+        // - no more work to do, but there are pending chunks
+        // - operation is fully complete - ack to client if primary
 
-        if (is_chunk_op_complete){
-            b->c1 = 1;
-            // three cases to consider:
-            // - thread can pull more work from src
-            // - no more work to do, but there are pending chunks
-            // - operation is fully complete - ack to client if primary
+        // no more work to do
+        if (qi->req->rem == 0){
+            // if we are the primary and no pending chunks, then 
+            // ack to client (under all_commit)
+            // NOTE: can't simply check if we're last active thread - others
+            // may be waiting on allocation still (single chunk requests)
 
-            // no more work to do
-            if (qi->req->rem == 0){
-                // if we are the primary and no pending chunks, then 
-                // ack to client (under all_commit)
-                // NOTE: can't simply check if we're last active thread - others
-                // may be waiting on allocation still (single chunk requests)
+            // "finalize" this thread
+            tprintf("%lu,%d: thread %d finished (msg %p) "
+                    "tid counts (%d, %d, %d+1) (rem:0)\n",
+                    lp->gid, qi->op_id, id->tid, m, qi->req->nthreads_init,
+                    qi->req->nthreads_alloc_waiting, qi->req->nthreads_fin);
+            qi->req->nthreads_fin++;
+            resource_lp_free(t->punit_size, lp);
+            // if we are the last thread then cleanup req
+            if (qi->req->nthreads_fin == qi->req->nthreads){
+                // just put onto queue, as reconstructing is just too
+                // difficult ATM
+                // TODO: mem mgmt
+                lprintf("%lu: rm op %d (async compl %s)\n", lp->gid,
+                        qi->op_id,
+                        m->h.event_type==COMPLETE_DISK_OP ? "disk":"fwd");
+                qlist_del(&qi->ql);
+                ns->bytes_written_local += qi->req->committed;
 #if 0
-                JUST CHECK LOCAL COMPLETION
-                if (ack_mode == ACK_ALL_COMMIT && qi->chain_pos == 0 &&
-                        qi->req->committed == qi->req->req.xfer_size && 
-                        qi->req->forwarded == qi->req->req.xfer_size)
-                if (qi->req->committed == qi->req->req.xfer_size) {
-                    b->c3 = 1;
-                    lprintf("%lu: acking to %lu\n",
-                            lp->gid, qi->cli_cb.header.src);
-                    triton_send_response(&qi->cli_cb, &qi->req->req, lp,
-                            model_net_id, ROSD_REQ_CONTROL_SZ, 0);
-                }
+                uint64_t mult = (fwd_mode==FWD_FAN) ? replication_factor-1 : 1;
+                ns->bytes_forwarded += qi->req->forwarded * mult;
 #endif
-
-                // "finalize" this thread
-                tprintf("%lu,%d: thread %d finished (msg %p) "
-                        "tid counts (%d, %d, %d+1) (rem:0)\n",
-                        lp->gid, qi->op_id, id->tid, m, qi->req->nthreads_init,
-                        qi->req->nthreads_alloc_waiting, qi->req->nthreads_fin);
-                qi->req->nthreads_fin++;
-                resource_lp_free(t->punit_size, lp);
-                // if we are the last thread then cleanup req
-                if (qi->req->nthreads_fin == qi->req->nthreads){
-                    // just put onto queue, as reconstructing is just too
-                    // difficult ATM
-                    // TODO: mem mgmt
-                    lprintf("%lu: rm op %d (async compl %s)\n", lp->gid,
-                            qi->op_id,
-                            m->h.event_type==COMPLETE_DISK_OP ? "disk":"fwd");
-                    qlist_del(&qi->ql);
-                    ns->bytes_written_local += qi->req->committed;
-#if 0
-                    uint64_t mult = (fwd_mode==FWD_FAN) ? replication_factor-1 : 1;
-                    ns->bytes_forwarded += qi->req->forwarded * mult;
-#endif
-                    rc_stack_push(lp, qi, ns->finished_pipeline_ops);
-                    b->c4 = 1;
-                }
+                rc_stack_push(lp, qi, ns->finished_pipeline_ops);
+                b->c4 = 1;
             }
-            else { // more work to do
-                b->c2 = 1;
-                // compute new chunk size
-                uint64_t chunk_sz = qi->req->punit_size > qi->req->rem ? 
-                    qi->req->rem : qi->req->punit_size;
-                tprintf("%lu,%d: thread %d given chunk %d (msg %p)"
-                        "tid counts (%d, %d, %d) rem %lu-%lu\n",
-                        lp->gid, qi->op_id, id->tid, 
-                        qi->req->thread_chunk_id_curr, m,
-                        qi->req->nthreads_init,
-                        qi->req->nthreads_alloc_waiting, qi->req->nthreads_fin,
-                        qi->req->rem, chunk_sz);
-                t->chunk_id = qi->req->thread_chunk_id_curr++;
-                t->chunk_size = chunk_sz;
-                lprintf("%lu: async-compl rem:%lu-%lu\n", lp->gid,
-                        qi->req->rem, chunk_sz);
-                qi->req->rem -= chunk_sz;
-                // clear out status
-                t->status.local_status = 0;
-                t->status.fwd_status_ct = 0;
-                memset(t->status.fwd_status, 0, 
-                        MAX_REPLICATION*sizeof(*t->status.fwd_status));
-
-                // setup, send message
-                triton_rosd_msg m_recv;
-                msg_set_header(rosd_magic, RECV_CHUNK, qi->src_lp, &m_recv.h);
-                m_recv.u.recv_chunk.id = *id;
-                //char * cat = qi->chain_pos==0 ? "srv-cli-pl-pull" : "srv-srv-pl-pull";
-                // control message gets high priority
-                int prio = 0;
-                model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
-                        (void*) &prio);
-                model_net_pull_event(model_net_id, "rosd", qi->src_lp, chunk_sz,
-                        0.0, sizeof(triton_rosd_msg), &m_recv, lp);
-                lprintf("%lu: pull req to %lu\n", lp->gid, qi->src_lp);
-            }
-
-            // if the source is a server, we need to send an internal ack
-#if 0
-            FORWARDING ACK
-            if (qi->src_lp != qi->cli_lp){
-                triton_rosd_msg m_ack;
-                msg_set_header(rosd_magic, RECV_CHUNK_FWD_ACK, lp->gid, &m_ack.h);
-                m_ack.u.chunk_ack.id = qi->rosd_cb;
-                m_ack.u.chunk_ack.chain_pos = qi->chain_pos;
-                //char * cat = "srv-chunk-ack";
-                int prio = 0;
-                model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
-                        (void*) &prio);
-                lprintf("%lu sending commit ack to %lu (cli %lu, op %lu) "
-                        "at %1.5e\n",
-                        lp->gid, qi->src_lp, qi->cli_lp, qi->cli_cb.op_index,
-                        tw_now(lp));
-                model_net_event(model_net_id, "rosd", qi->src_lp,
-                        ROSD_REQ_CONTROL_SZ, 0.0, sizeof(m_ack), &m_ack, 0, NULL,
-                        lp);
-            }
-#endif
         }
-#if 0
-        NO LONGER POSSIBLE
-        else{
-            tprintf("%lu,%d: %s op complete\n", lp->gid, id->tid,
-                    m->h.event_type==COMPLETE_DISK_OP ? "loc" : "fwd");
+        else { // more work to do
+            b->c2 = 1;
+            // compute new chunk size
+            uint64_t chunk_sz = qi->req->punit_size > qi->req->rem ? 
+                qi->req->rem : qi->req->punit_size;
+            tprintf("%lu,%d: thread %d given chunk %d (msg %p)"
+                    "tid counts (%d, %d, %d) rem %lu-%lu\n",
+                    lp->gid, qi->op_id, id->tid, 
+                    qi->req->thread_chunk_id_curr, m,
+                    qi->req->nthreads_init,
+                    qi->req->nthreads_alloc_waiting, qi->req->nthreads_fin,
+                    qi->req->rem, chunk_sz);
+            t->chunk_id = qi->req->thread_chunk_id_curr++;
+            t->chunk_size = chunk_sz;
+            lprintf("%lu: async-compl rem:%lu-%lu\n", lp->gid,
+                    qi->req->rem, chunk_sz);
+            qi->req->rem -= chunk_sz;
+
+            // setup, send message
+            triton_rosd_msg m_recv;
+            msg_set_header(rosd_magic, RECV_CHUNK, qi->cli_lp, &m_recv.h);
+            m_recv.u.recv_chunk.id = *id;
+            // control message gets high priority
+            int prio = 0;
+            model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
+                    (void*) &prio);
+            model_net_pull_event(model_net_id, "rosd", qi->cli_lp, chunk_sz,
+                    0.0, sizeof(triton_rosd_msg), &m_recv, lp);
+            lprintf("%lu: pull req to %lu\n", lp->gid, qi->cli_lp);
         }
-#endif
     }
-
 
     MN_END_SEQ();
 }
@@ -1508,8 +1199,6 @@ void handle_complete_chunk_send(
         t->chunk_size = chunk_sz;
         lprintf("%lu: compl send rem:%lu-%lu\n", lp->gid, qi->req->rem, chunk_sz);
         qi->req->rem -= chunk_sz;
-        // clear out status
-        t->status.local_status = 0;
 
         // do a read
         tw_event *e = lsm_event_new(
@@ -1630,7 +1319,7 @@ void handle_recv_io_req_rc(
     }
 #endif
 
-    lprintf("%lu: new req rc id:%d from %lu\n", lp->gid, qi->op_id, qi->src_lp);
+    lprintf("%lu: new req rc id:%d from %lu\n", lp->gid, qi->op_id, qi->cli_lp);
     qlist_del(qitem_ent);
     rosd_pipeline_destroy(qi->req);
     free(qi);
@@ -1656,10 +1345,6 @@ void handle_pipeline_alloc_callback_rc(
         // undo the stats
         if (qi->type == REQ_WRITE) {
             ns->bytes_written_local -= qi->req->committed;
-#if 0
-            uint64_t mult = (fwd_mode==FWD_FAN) ? replication_factor-1 : 1;
-            ns->bytes_forwarded -= qi->req->forwarded * mult;
-#endif
         }
         else {
             ns->bytes_read_local -= qi->req->committed;
@@ -1746,62 +1431,6 @@ void handle_recv_chunk_rc(
     lsm_event_new_reverse(lp);
 
     qi->req->received -= t->chunk_size;
-
-    // find the chunk request metadata
-#if 0
-    ALL ABOUT FORWARDING
-    rosd_chunk_req_info *info = NULL;
-    struct qlist_head *chunk_ent = NULL;
-    if (qi->cli_lp != qi->src_lp){
-        if (b->c1){
-            info = rc_stack_pop(ns->finished_chunk_ops);
-            chunk_ent = &info->ql;
-            qlist_add_tail(chunk_ent, &ns->pending_chunk_ops);
-        }
-        else{
-            qlist_for_each(chunk_ent, &ns->pending_chunk_ops){
-                info = qlist_entry(chunk_ent, rosd_chunk_req_info, ql);
-                if (info->cli_src == qi->cli_lp
-                        && info->cli_op_id == qi->cli_cb.op_index) {
-                    break;
-                }
-            }
-        }
-        // TODO: duplicate recv error
-        assert(chunk_ent != &ns->pending_chunk_ops);
-        info->received -= t->chunk_size;
-    }
-
-    if (b->c0){
-        triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
-    }
-    else if (b->c2){
-        triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
-    }
-    else if (b->c3){
-        model_net_event_rc(model_net_id, lp, ROSD_REQ_CONTROL_SZ);
-    }
-
-    int do_chain_fwd = 
-        (fwd_mode == FWD_CHAIN && qi->chain_pos < replication_factor-1);
-    int do_fan_fwd = (fwd_mode == FWD_FAN && qi->chain_pos == 0);
-
-    if (do_chain_fwd || do_fan_fwd){
-        int num_fwds = do_chain_fwd ? 1 : replication_factor-1;
-        for (int i = 1; i <= num_fwds; i++){
-            model_net_event_rc(model_net_id, lp, ROSD_REQ_CONTROL_SZ);
-        }
-    }
-    // need to reset dummy forwarding status
-    else if (fwd_mode == FWD_CHAIN){
-        t->status.fwd_status_ct = 0;
-    }
-    else{
-        t->status.fwd_status_ct = 0;
-        memset(t->status.fwd_status+1, 0, 
-                (replication_factor-1)*sizeof(*t->status.fwd_status));
-    }
-#endif
 }
 
 static void handle_async_meta_completion_rc(
@@ -1852,10 +1481,6 @@ static void handle_async_completion_rc(
         qlist_add_tail(&qi->ql, &ns->pending_pipeline_ops);
         // undo the stats
         ns->bytes_written_local -= qi->req->committed;
-#if 0
-        uint64_t mult = (fwd_mode==FWD_FAN) ? replication_factor-1 : 1;
-        ns->bytes_forwarded -= qi->req->forwarded * mult;
-#endif
     }
     else{
         struct qlist_head *ent = NULL;
@@ -1879,59 +1504,19 @@ static void handle_async_completion_rc(
         prev_chunk_size = m->u.complete_sto.rc.chunk_size;
         prev_chunk_id   = m->u.complete_sto.rc.chunk_id;
     }
-#if 0
-    else{
-        prev_chunk_size = m->u.chunk_ack.rc.chunk_size;
-        prev_chunk_id   = m->u.chunk_ack.rc.chunk_id;
-    }
-#endif
 
-    // recreate the "finished" request status if needed
-    if (b->c1 && b->c2){
-        t->status.local_status = 1;
-#if 0
-        if (fwd_mode == FWD_CHAIN){
-            t->status.fwd_status_ct = 1;
-        }
-        else{
-            t->status.fwd_status_ct = replication_factor-1;
-            for (int i = 1; i <= replication_factor-1; i++){
-                t->status.fwd_status[i] = 1;
-            }
-        }
-#endif
-    }
-
-    // reverse the status completion
     lprintf("%lu: commit:%lu-%lu\n", lp->gid,
             qi->req->committed, prev_chunk_size);
     qi->req->committed -= prev_chunk_size;
-    t->status.local_status = 0;
     if (b->c0){
         triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
     }
-#if 0
-    else if (fwd_mode == FWD_CHAIN){
-        t->status.fwd_status_ct--;
-        qi->req->forwarded -= prev_chunk_size;
-    }
-    else{
-        // fan mode
-        int chain_pos_src = m->u.chunk_ack.chain_pos;
-        if (t->status.fwd_status_ct == replication_factor-1){
-            qi->req->forwarded -= prev_chunk_size;
-        }
-        
-        t->status.fwd_status_ct--;
-        t->status.fwd_status[chain_pos_src] = 0;
-    }
-#endif
 
     if (qi->type == REQ_READ){
         model_net_event_rc(model_net_id, lp, prev_chunk_size);
     }
     // else write && chunk op is complete
-    else if (b->c1){
+    else {
         // thread pulled more data
         if (b->c2){
             // note - previous derived chunk size is currently held in thread
@@ -1955,12 +1540,6 @@ static void handle_async_completion_rc(
             model_net_pull_event_rc(model_net_id, lp);
         }
         else{
-#if 0
-            just checking local completion
-            if (b->c3){
-                triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
-            }
-#endif
             tprintf("%lu,%d: thread %d finished rc (msg %p), "
                     "tid counts (%d, %d, %d-1)\n",
                     lp->gid, qi->op_id, id->tid, m, qi->req->nthreads_init,
@@ -1969,13 +1548,6 @@ static void handle_async_completion_rc(
             resource_lp_free_rc(lp);
             // reversal of deletion occurred earlier
         }
-
-#if 0
-        FORWARDING
-        if (qi->src_lp != qi->cli_lp){
-            model_net_event_rc(model_net_id, lp, ROSD_REQ_CONTROL_SZ);
-        }
-#endif
     }
 }
 
@@ -2105,7 +1677,6 @@ void handle_complete_chunk_send_rc(
     }
     else {
         qi->req->rem += t->chunk_size;
-        t->status.local_status = 1;
         qi->req->thread_chunk_id_curr--;
         lsm_event_new_reverse(lp);
     }

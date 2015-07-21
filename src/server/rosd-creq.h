@@ -50,7 +50,6 @@ struct rosd_pipelined_thread {
     // explicitly tracking them
     uint64_t chunk_size;
     uint64_t punit_size;
-    op_status status;
 };
 
 rosd_pipelined_req* rosd_pipeline_init(
