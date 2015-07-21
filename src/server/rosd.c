@@ -18,7 +18,6 @@
 #include "rosd.h"
 #include "rosd-creq.h"
 #include "../util/msg.h"
-#include "../placement/placement.h"
 #include "../util/map_util.h"
 
 /// danger: debug messages will produce a LOT of output, even for small runs
@@ -49,7 +48,6 @@ extern int model_net_id;
 
 /* system parameters */
 static int num_servers;
-int replication_factor;
 static int num_threads = 4;
 static int pipeline_unit_size = (1<<22);
 
@@ -204,16 +202,7 @@ void rosd_configure(){
     num_servers = codes_mapping_get_lp_count(NULL, 0, ROSD_LP_NM, NULL, 1);
 
     /* until we get rid of RF logic... */
-    replication_factor = 1;
     int rc;
-#if 0
-    int rc = configuration_get_value_int(&config, ROSD_LP_NM, 
-            "replication_factor", NULL, &replication_factor);
-    assert(rc==0);
-    assert(replication_factor <= MAX_REPLICATION);
-
-    char val[MAX_NAME_LENGTH];
-#endif
 
     // get the number of threads and the pipeline buffer size
     // if not available, no problem - use a default of 4 threads, 4MB per
@@ -222,15 +211,6 @@ void rosd_configure(){
             NULL, &num_threads);
     rc = configuration_get_value_int(&config, ROSD_LP_NM, "thread_buf_sz",
             NULL, &pipeline_unit_size);
-
-#if 0
-    /* get the placement algorithm */
-    rc = configuration_get_value(&config, ROSD_LP_NM, "placement", 
-            NULL, val, MAX_NAME_LENGTH);
-    assert(rc>0);
-#endif
-    /* just for now... */
-    placement_set("multiring:1", (unsigned int)num_servers);
 
     /* done!!! */
 }
@@ -241,9 +221,6 @@ void rosd_configure(){
 void triton_rosd_init(triton_rosd_state *ns, tw_lp *lp) {
     ns->server_index = get_rosd_index(lp->gid);
     assert(ns->server_index < num_servers);
-
-    ns->oid_srv_map = malloc(replication_factor * sizeof(*ns->oid_srv_map));
-    assert(ns->oid_srv_map);
 
     INIT_QLIST_HEAD(&ns->pending_pipeline_ops);
     rc_stack_create(&ns->finished_pipeline_ops);
@@ -380,7 +357,6 @@ void triton_rosd_event_handler_rc(
 }
 
 void triton_rosd_finalize(triton_rosd_state *ns, tw_lp *lp) {
-    free(ns->oid_srv_map);
     rc_stack_destroy(1, ns->finished_pipeline_ops);
     rc_stack_destroy(1, ns->finished_chunk_ops);
 
@@ -475,23 +451,6 @@ void handle_recv_io_req(
         tw_bf *b,
         triton_rosd_msg * m,
         tw_lp * lp){
-
-    // verify object status on server 
-    // TODO: currently just checks against placement
-    int is_obj_on_server = 0;
-    placement_find_closest(m->u.creq.req.oid, replication_factor, 
-            ns->oid_srv_map);
-    for (int srv_map_pos = 0; srv_map_pos < replication_factor; 
-            srv_map_pos++){
-        if ((int)ns->oid_srv_map[srv_map_pos] == ns->server_index){
-            is_obj_on_server = 1;
-            break;
-        }
-    }
-    if (!is_obj_on_server){
-        tw_error(TW_LOC, 
-                "object not resident on server, TODO: handle properly\n");
-    }
 
     if (m->u.creq.req.req_type == REQ_OPEN) {
         tw_event *e_local;
@@ -1747,23 +1706,6 @@ void handle_recv_io_req_rc(
         tw_bf *b,
         triton_rosd_msg * m,
         tw_lp * lp){
-
-    // verify object status on server 
-    // TODO: currently just checks against placement
-    int is_obj_on_server = 0;
-    placement_find_closest(m->u.creq.req.oid, replication_factor, 
-            ns->oid_srv_map);
-    for (int srv_map_pos = 0; srv_map_pos < replication_factor; 
-            srv_map_pos++){
-        if ((int)ns->oid_srv_map[srv_map_pos] == ns->server_index){
-            is_obj_on_server = 1;
-            break;
-        }
-    }
-    if (!is_obj_on_server){
-        tw_error(TW_LOC, 
-                "object not resident on server, TODO: handle properly\n");
-    }
 
     int op_id_prev = (m->h.event_type==RECV_CLI_REQ) ?
         m->u.creq.rc.op_id : m->u.sreq.rc.op_id;

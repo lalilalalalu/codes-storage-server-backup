@@ -12,7 +12,6 @@
 #include "codes/lp-msg.h"
 #include "codes/model-net-sched.h"
 #include "../server/rosd.h"
-#include "../placement/placement.h"
 #include "map_util.h"
 
 void triton_send_request(triton_io_greq *r, tw_lp *sender, int model_net_id){
@@ -25,10 +24,9 @@ void triton_send_request(triton_io_greq *r, tw_lp *sender, int model_net_id){
     /* sanity check - ack size is large enough for response */
     assert(m.u.creq.callback.event_size >= sizeof(triton_io_gresp)+sizeof(msg_header));
 
-    unsigned long rosd_ul;
     /* find the primary ROSD server lp corresponding to this request */
-    placement_find_closest(m.u.creq.req.oid, 1, &rosd_ul);
-    tw_lpid rosd_lp = get_rosd_lpid((int)rosd_ul);
+    /* TODO: dummy this until replaced */
+    tw_lpid rosd_lp = get_rosd_lpid(0);
     //char * cat = "cli-srv-req";
     // need this to be a high-priority message
     int prio = 0;
