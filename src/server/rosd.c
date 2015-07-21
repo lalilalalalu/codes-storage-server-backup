@@ -91,28 +91,6 @@ static void handle_complete_disk_op(
         tw_bf *b,
         triton_rosd_msg * m,
         tw_lp * lp);
-#if 0
-static void handle_recv_metadata_ack(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp);
-static void handle_recv_metadata_fwd_ack(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp);
-static void handle_recv_data_ack(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp);
-static void handle_recv_chunk_fwd_ack(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp);
-#endif
 static void handle_complete_chunk_send(
         triton_rosd_state * ns,
         tw_bf *b,
@@ -139,28 +117,6 @@ static void handle_complete_disk_op_rc(
         tw_bf *b,
         triton_rosd_msg * m,
         tw_lp * lp);
-#if 0
-static void handle_recv_metadata_ack_rc(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp);
-static void handle_recv_metadata_fwd_ack_rc(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp);
-static void handle_recv_data_ack_rc(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp);
-static void handle_recv_chunk_fwd_ack_rc(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp);
-#endif
 static void handle_complete_chunk_send_rc(
         triton_rosd_state * ns,
         tw_bf *b,
@@ -421,119 +377,11 @@ void handle_recv_io_req(
         m_local->u.complete_sto.is_data_op = 0;
         tw_event_send(e_local);
 
-        // we may not use it, but set the forwarding message up anyways
-#if 0
-        msg_set_header(rosd_magic, RECV_SRV_REQ, lp->gid, &m_fwd.h);
-        m_fwd.u.sreq.req = qm->req;
-        m_fwd.u.sreq.total_req_sz = 0;
-        m_fwd.u.sreq.id = cb_id;
-#endif
-
         // go ahead and push the partially complete op
         qlist_add_tail(&qm->ql, &ns->pending_meta_ops);
 
-#if 0
-        THIS IS ALL FORWARDING CODE
-        MN_START_SEQ();
-        if (m->h.event_type == RECV_CLI_REQ) {
-            m->u.creq.rc.op_id = qm->op_id;
-            // if we're runnign primary recv, we can go ahead and ack the
-            // client
-            if (ack_mode == ACK_PRIMARY_RECV)
-                triton_send_response(&m->u.creq.callback, &m->u.creq.req, lp,
-                        model_net_id, ROSD_REQ_CONTROL_SZ, 0);
-            qm->cli_lp = m->h.src;
-            qm->chain_pos = 0;
-            qm->cli_cb = m->u.creq.callback;
-            qm->status.fwd_status_ct = 0;
-            if (fwd_mode == FWD_FAN){
-                memset(qm->status.fwd_status, 0,
-                        replication_factor*sizeof(*qm->status.fwd_status));
-                if (ack_mode == ACK_ALL_RECV) {
-                    qm->recv_status_ct = 0;
-                    memset(qm->recv_status, 0,
-                            replication_factor*sizeof(*qm->recv_status));
-                }
-            }
-            /* send out the forwarding calls */
-            if (replication_factor > 1 && qm->req.create) {
-                int num_fwds;
-                int i;
-                m_fwd.u.sreq.callback = m->u.creq.callback;
-
-                num_fwds = (fwd_mode == FWD_FAN) ? replication_factor-1 : 1;
-                for (i = 0; i < num_fwds; i++) {
-                    tw_lpid dst = get_rosd_lpid((int)ns->oid_srv_map[i+1]);
-                    int prio = 0;
-                    model_net_set_msg_param(MN_MSG_PARAM_SCHED,
-                            MN_SCHED_PARAM_PRIO, (void*) &prio);
-                    // for simplicity, set chain pos to position in oid_srv_map
-                    m_fwd.u.sreq.chain_pos = i+1;
-                    model_net_event(model_net_id, "rosd", dst,
-                            ROSD_REQ_CONTROL_SZ, 0.0, sizeof(m_fwd), &m_fwd, 0,
-                            NULL, lp);
-                }
-            }
-        }
-        else {
-            m->u.sreq.rc.op_id = qm->op_id;
-            qm->cli_lp = m->u.sreq.callback.header.src;
-            qm->chain_pos = m->u.sreq.chain_pos;
-            qm->cli_cb = m->u.sreq.callback;
-            qm->rosd_cb = m->u.sreq.id;
-            qm->status.fwd_status_ct = 0;
-            // send off the next forward if needed
-            if (fwd_mode == FWD_CHAIN) {
-                if (qm->chain_pos < replication_factor-1 && qm->req.create) {
-                    int prio = 0;
-                    tw_lpid dst =
-                        get_rosd_lpid((int)ns->oid_srv_map[qm->chain_pos+1]);
-                    m_fwd.u.sreq.callback = m->u.sreq.callback;
-                    m_fwd.u.sreq.chain_pos = qm->chain_pos + 1;
-                    model_net_set_msg_param(MN_MSG_PARAM_SCHED,
-                            MN_SCHED_PARAM_PRIO, (void*) &prio);
-                    model_net_event(model_net_id, "rosd", dst,
-                            ROSD_REQ_CONTROL_SZ, 0.0, sizeof(m_fwd), &m_fwd, 0,
-                            NULL, lp);
-                }
-                if (qm->chain_pos == replication_factor-1 &&
-                        ack_mode == ACK_ALL_RECV)
-                    triton_send_response(&m->u.sreq.callback, &m->u.sreq.req, lp,
-                            model_net_id, ROSD_REQ_CONTROL_SZ, 0);
-            }
-            // send an internal ack if running fan+all_recv
-            if (fwd_mode == FWD_FAN && ack_mode == ACK_ALL_RECV) {
-                triton_rosd_msg m_ack;
-                int prio = 0;
-                msg_set_header(rosd_magic, RECV_METADATA_ACK,
-                        lp->gid, &m_ack.h);
-                m_ack.u.recv_meta_ack.op_id = m->u.sreq.id.op_id;
-                m_ack.u.recv_meta_ack.chain_pos = qm->chain_pos;
-                model_net_set_msg_param(MN_MSG_PARAM_SCHED,
-                        MN_SCHED_PARAM_PRIO, (void*) &prio);
-                model_net_event(model_net_id, "rosd", qm->src_lp,
-                        ROSD_REQ_CONTROL_SZ, 0.0, sizeof(m_ack), &m_ack, 0,
-                        NULL, lp);
-            }
-        }
-
-        MN_END_SEQ();
-#endif
-
         return;
     }
-#if 0
-    if (m->h.event_type == RECV_CLI_REQ && m->u.creq.req.req_type == REQ_OPEN){
-        triton_send_response(&m->u.creq.callback, &m->u.creq.req, lp,
-                model_net_id, ROSD_REQ_CONTROL_SZ, 0);
-        return;
-    }
-    else{
-        // TODO: currently don't handle non-primary opens 
-        assert(!(m->h.event_type == RECV_SRV_REQ && 
-                 m->u.sreq.req.req_type == REQ_OPEN));
-    }
-#endif
 
     // initialize a pipelining operation
     rosd_pipeline_qitem *qi = malloc(sizeof(rosd_pipeline_qitem)); 
@@ -971,131 +819,6 @@ void handle_complete_disk_op(
     else
         handle_async_meta_completion(ns, b, m, lp);
 }
-#if 0
-FORWARDING EVS
-void handle_recv_chunk_fwd_ack(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp){
-    handle_async_completion(ns, b, m, lp);
-}
-
-void handle_recv_metadata_fwd_ack(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp){
-    handle_async_meta_completion(ns, b, m, lp);
-}
-
-void handle_recv_metadata_ack(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp){
-    assert(fwd_mode == FWD_FAN && ack_mode == ACK_ALL_RECV);
-
-    // look up meta request
-    struct qlist_head *ent = NULL;
-    rosd_meta_qitem *qi = NULL;
-    qlist_for_each(ent, &ns->pending_meta_ops){
-        qi = qlist_entry(ent, rosd_meta_qitem, ql);
-        if (qi->op_id == m->u.recv_meta_ack.op_id){
-            break;
-        }
-    }
-    if (ent == &ns->pending_meta_ops){
-        int written = sprintf(ns->output_buf,
-                "ERROR: meta op with id %d not found on LP %lu "
-                "(meta recv ack)",
-                m->u.recv_meta_ack.op_id, lp->gid);
-        lp_io_write(lp->gid, "errors", written, ns->output_buf);
-        ns->error_ct = 1;
-        return;
-    }
-
-    // we must be the primary
-    assert(qi->chain_pos == 0);
-
-    int chain_pos_src = m->u.recv_meta_ack.chain_pos;
-    assert(chain_pos_src > 0 && chain_pos_src < MAX_REPLICATION);
-    if (qi->recv_status[chain_pos_src] != 0){
-        int written = sprintf(ns->output_buf,
-                "ERROR: %lu: already recieved meta ack for this position\n",
-                lp->gid);
-        lp_io_write(lp->gid, "errors", written, ns->output_buf);
-        ns->error_ct = 1;
-    }
-
-    qi->recv_status[chain_pos_src] = 1;
-    qi->recv_status_ct += 1;
-
-    if (qi->recv_status_ct == replication_factor-1){
-        // send a client ack
-        lprintf("%lu sending ack to %lu\n", lp->gid, qi->cli_cb.header.src);
-        triton_send_response(&qi->cli_cb, &qi->req, lp, model_net_id,
-                ROSD_REQ_CONTROL_SZ, 0);
-    }
-}
-
-// bitfields used:
-// c0 - sent a response
-void handle_recv_data_ack(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp){
-    // the only server that should be receiving is the primary, and only under
-    // fan+all_recv mode
-    assert(fwd_mode == FWD_FAN && ack_mode == ACK_ALL_RECV);
-
-    // look up pipeline request
-    struct qlist_head *ent = NULL;
-    rosd_pipeline_qitem *qi = NULL; 
-    qlist_for_each(ent, &ns->pending_pipeline_ops){
-        qi = qlist_entry(ent, rosd_pipeline_qitem, ql);
-        if (qi->op_id == m->u.recv_data_ack.op_id){
-            break;
-        }
-    }
-    if (ent == &ns->pending_pipeline_ops){
-        int written = sprintf(ns->output_buf, 
-                "ERROR: pipeline op with id %d not found on LP %lu "
-                "(chunk recv)", 
-                m->u.recv_chunk.id.op_id, lp->gid);
-        lp_io_write(lp->gid, "errors", written, ns->output_buf);
-        ns->error_ct = 1;
-        return;
-    }
-
-    // we must be the primary
-    assert(qi->chain_pos == 0);
-
-    int chain_pos_src = m->u.recv_data_ack.chain_pos;
-    assert(chain_pos_src > 0 && chain_pos_src < MAX_REPLICATION);
-    // update the status (with appropriate error checks)
-    if (qi->recv_status[chain_pos_src] != 0){
-        int written = sprintf(ns->output_buf,
-                "ERROR: %lu: already recieved data ack for this position\n",
-                lp->gid);
-        lp_io_write(lp->gid, "errors", written, ns->output_buf);
-        ns->error_ct = 1;
-        return;
-    }
-
-    qi->recv_status[chain_pos_src] = 1;
-    qi->recv_status_ct += 1;
-
-    if (qi->recv_status_ct == replication_factor-1){
-        // send a client ack
-        b->c0 = 1;
-        lprintf("%lu sending ack to %lu\n", lp->gid, qi->cli_cb.header.src);
-        triton_send_response(&qi->cli_cb, &qi->req->req, lp, model_net_id,
-                ROSD_REQ_CONTROL_SZ, 0);
-    }
-}
-#endif
 
 // bitfields used:
 // c0 - no more work to do
@@ -1235,31 +958,6 @@ void handle_recv_io_req_rc(
 
         lsm_event_new_reverse(lp);
 
-#if 0
-        FORWARDING OR PROTOCOL RELATED
-        if (m->h.event_type == RECV_CLI_REQ) {
-            if (ack_mode == ACK_PRIMARY_RECV)
-                triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
-            if (replication_factor > 1 && qm->req.create) {
-                int i;
-                int num_fwds = (fwd_mode == FWD_FAN) ? replication_factor-1 : 1;
-                for (i = 0; i < num_fwds; i++) {
-                    model_net_event_rc(model_net_id, lp, ROSD_REQ_CONTROL_SZ);
-                }
-            }
-        }
-        else {
-            if (fwd_mode == FWD_CHAIN) {
-                if (qm->chain_pos < replication_factor-1 && qm->req.create)
-                    model_net_event_rc(model_net_id, lp, ROSD_REQ_CONTROL_SZ);
-                if (qm->chain_pos == replication_factor-1 &&
-                        ack_mode == ACK_ALL_RECV)
-                    triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
-            }
-            if (fwd_mode == FWD_FAN && ack_mode == ACK_ALL_RECV)
-                model_net_event_rc(model_net_id, lp, ROSD_REQ_CONTROL_SZ);
-        }
-#endif
         free(qm);
         return;
     }
@@ -1520,78 +1218,6 @@ void handle_complete_disk_op_rc(
     else
         handle_async_meta_completion_rc(ns, b, m, lp);
 }
-#if 0
-void handle_recv_chunk_fwd_ack_rc(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp){
-    handle_async_completion_rc(ns, b, m, lp);
-}
-
-void handle_recv_metadata_fwd_ack_rc(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp){
-    handle_async_meta_completion_rc(ns, b, m, lp);
-}
-
-void handle_recv_metadata_ack_rc(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp){
-
-    assert(fwd_mode == FWD_FAN && ack_mode == ACK_ALL_RECV);
-
-    // look up meta request
-    struct qlist_head *ent = NULL;
-    rosd_meta_qitem *qi = NULL;
-    qlist_for_each(ent, &ns->pending_meta_ops){
-        qi = qlist_entry(ent, rosd_meta_qitem, ql);
-        if (qi->op_id == m->u.recv_meta_ack.op_id){
-            break;
-        }
-    }
-    assert(ent != &ns->pending_meta_ops);
-
-    assert(qi->chain_pos == 0);
-
-    int chain_pos_src = m->u.recv_meta_ack.chain_pos;
-    assert(chain_pos_src > 0 && chain_pos_src < MAX_REPLICATION);
-
-    if (qi->recv_status_ct == replication_factor-1)
-        triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
-
-    qi->recv_status[chain_pos_src] = 0;
-    qi->recv_status_ct--;
-}
-
-void handle_recv_data_ack_rc(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp){
-    struct qlist_head *ent;
-    rosd_pipeline_qitem *qi = NULL;
-    qlist_for_each(ent, &ns->pending_pipeline_ops){
-        qi = qlist_entry(ent, rosd_pipeline_qitem, ql);
-        if (qi->op_id == m->u.recv_data_ack.op_id){
-            break;
-        }
-    }
-    assert(ent != &ns->pending_pipeline_ops);
-
-    int chain_pos_src = m->u.recv_data_ack.chain_pos;
-    qi->recv_status[chain_pos_src] = 0;
-    qi->recv_status_ct--;
-
-    if (b->c0){
-        triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
-    }
-}
-#endif
 
 void handle_complete_chunk_send_rc(
         triton_rosd_state * ns,
