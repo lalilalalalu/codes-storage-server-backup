@@ -415,9 +415,9 @@ void handle_recv_io_req(
         rosd_meta_qitem *qm = malloc(sizeof(*qm));
         assert(qm);
 
+        qm->cli_lp = m->h.src;
+        qm->cli_cb = m->u.creq.callback;
         qm->op_id = ns->op_idx_pl++;
-        qm->src_lp = m->h.src;
-        qm->status.local_status = 0;
         qm->req = m->u.creq.req;
         cb_id.op_id = qm->op_id;
         cb_id.tid = -1;
@@ -442,12 +442,6 @@ void handle_recv_io_req(
 
         // go ahead and push the partially complete op
         qlist_add_tail(&qm->ql, &ns->pending_meta_ops);
-
-        // TODO: this will change
-        qm->cli_lp = m->h.src;
-        qm->chain_pos = 0;
-        qm->cli_cb = m->u.creq.callback;
-        qm->status.fwd_status_ct = 0;
 
 #if 0
         THIS IS ALL FORWARDING CODE
@@ -1005,15 +999,7 @@ static void handle_async_meta_completion(
         triton_rosd_msg * m,
         tw_lp * lp){
     int id;
-    if (m->h.event_type == COMPLETE_DISK_OP){
-        id = m->u.complete_sto.id.op_id;
-    }
-#if 0
-    FORWARDING
-    else{
-        id = m->u.recv_meta_ack.op_id;
-    }
-#endif
+    id = m->u.complete_sto.id.op_id;
 
     // find the meta op
     struct qlist_head *ent = NULL;
@@ -1034,110 +1020,12 @@ static void handle_async_meta_completion(
         return;
     }
 
-    // update the status
-    if (m->h.event_type == COMPLETE_DISK_OP){
-        if (qi->status.local_status > 0){
-            int written = sprintf(ns->output_buf,
-                    "ERROR: LP %lu duplicate storage acks "
-                    "(op_id %d)\n",
-                    lp->gid, qi->op_id);
-            lp_io_write(lp->gid, "errors", written, ns->output_buf);
-            ns->error_ct = 1;
-            return;
-        }
-        qi->status.local_status++;
-        // if we're the primary under primary_commit, ack
-        // UNCONDITIONAL
-        // if (ack_mode == ACK_PRIMARY_COMMIT && qi->chain_pos == 0) {
-            triton_send_response(&qi->cli_cb, &qi->req, lp,
-                    model_net_id, ROSD_REQ_CONTROL_SZ, 0);
-        //}
-    }
-#if 0
-    FORWARDING CHECKS
-    else {
-        if (fwd_mode == FWD_CHAIN) {
-            if (qi->status.fwd_status_ct > 0){
-                int written = sprintf(ns->output_buf,
-                        "ERROR: LP %lu duplicate forwarding acks "
-                        "(op_id %d)\n",
-                        lp->gid, qi->op_id);
-                lp_io_write(lp->gid, "errors", written, ns->output_buf);
-                ns->error_ct = 1;
-                return;
-            }
-            qi->status.fwd_status_ct++;
-        }
-        else if (fwd_mode == FWD_FAN){
-            int c = m->u.recv_meta_ack.chain_pos;
-            if (qi->status.fwd_status[c] > 0) {
-                int written = sprintf(ns->output_buf,
-                        "ERROR: LP %lu duplicate forwarding acks "
-                        "(op_id %d)\n",
-                        lp->gid, qi->op_id);
-                lp_io_write(lp->gid, "errors", written, ns->output_buf);
-                ns->error_ct = 1;
-                return;
-            }
-            qi->status.fwd_status_ct++;
-            qi->status.fwd_status[c]++;
-        }
-        else
-            assert(0);
-    }
+    triton_send_response(&qi->cli_cb, &qi->req, lp, model_net_id,
+            ROSD_REQ_CONTROL_SZ, 0);
 
-    int is_primary = (qi->chain_pos == 0);
-    int is_tail = (fwd_mode == FWD_CHAIN) ?
-            qi->chain_pos == replication_factor-1 :
-            qi->chain_pos > 0;
-#endif
-
-    // check if op is fully complete in the eyes of the server
-    // (if it's not a create then fwd unnecessary)
-    // (if it's at the tail end of the chain then ignore the fwd status check)
-    int is_op_complete;
-#if 0
-    CHECKS CONFLATE FORWARDING
-    if (qi->status.local_status && is_tail)
-        is_op_complete = 1;
-    else if (qi->status.local_status && is_primary && !qi->req.create)
-        is_op_complete = 1;
-    else
-        is_op_complete = qi->status.local_status &&
-            ((fwd_mode == FWD_CHAIN) ? (qi->status.fwd_status_ct == 1)
-             : (qi->status.fwd_status_ct == replication_factor-1));
-#endif
-    is_op_complete = qi->status.local_status;
-
-    if (is_op_complete) {
-#if 0
-        OVERLAPS WITH PRIMARY_COMMIT
-        if (is_primary && ack_mode == ACK_ALL_COMMIT) {
-            triton_send_response(&qi->cli_cb, &qi->req, lp,
-                    model_net_id, ROSD_REQ_CONTROL_SZ, 0);
-        }
-        MORE FORWARDING
-        else if (!is_primary) {
-            // need to send an internal ack to the originating server
-            assert(qi->src_lp != qi->cli_lp);
-            triton_rosd_msg m_ack;
-            int prio = 0;
-            msg_set_header(rosd_magic, RECV_METADATA_FWD_ACK, lp->gid, &m_ack.h);
-            m_ack.u.recv_meta_ack.op_id = qi->rosd_cb.op_id;
-            m_ack.u.recv_meta_ack.chain_pos = qi->chain_pos;
-            model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
-                    (void*) &prio);
-            model_net_event(model_net_id, "rosd", qi->src_lp,
-                    ROSD_REQ_CONTROL_SZ, 0.0, sizeof(m_ack), &m_ack, 0, NULL,
-                    lp);
-        }
-#endif
-        // this op is done, get "rid" of it
-        qlist_del(&qi->ql);
-        rc_stack_push(lp, qi, ns->finished_meta_ops);
-        b->c0 = 1;
-    }
-    // else don't do anything
+    // this op is done, get "rid" of it
+    qlist_del(&qi->ql);
+    rc_stack_push(lp, qi, ns->finished_meta_ops);
 }
 
 // bitfields used:
@@ -1939,36 +1827,9 @@ static void handle_async_meta_completion_rc(
         assert(ent != &ns->pending_meta_ops);
     }
 
-    int is_primary = (qi->chain_pos == 0);
-    if (b->c0) {
-#if 0
-        if (is_primary && ack_mode == ACK_ALL_COMMIT)
-            triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
-        else if (!is_primary)
-            model_net_event_rc(model_net_id, lp, ROSD_REQ_CONTROL_SZ);
-#endif
-        // put the op back on the pending list
-        qlist_add_tail(&qi->ql, &ns->pending_meta_ops);
-    }
+    qlist_add_tail(&qi->ql, &ns->pending_meta_ops);
 
-    // finally reverse the completion status
-    if (m->h.event_type == COMPLETE_DISK_OP) {
-        qi->status.local_status--;
-        // UNCONDITIONAL
-        // if (ack_mode == ACK_PRIMARY_COMMIT && qi->chain_pos == 0)
-            triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
-    }
-#if 0
-    FORWARDING
-    else {
-        if (fwd_mode == FWD_CHAIN)
-            qi->status.fwd_status_ct--;
-        else if (fwd_mode == FWD_FAN) {
-            qi->status.fwd_status_ct--;
-            qi->status.fwd_status[m->u.recv_meta_ack.chain_pos]--;
-        }
-    }
-#endif
+    triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
 }
 
 static void handle_async_completion_rc(

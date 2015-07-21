@@ -128,17 +128,10 @@ struct rosd_pipeline_qitem {
 struct rosd_meta_qitem {
     // my op id
     int op_id;
-    // position in forwarding chain
-    int chain_pos;
     request_params req;
-    // status of the operation
-    op_status status;
-    // status of metadata op recv (strictly for fan+all_recv protocol)
-    int recv_status_ct;
-    char recv_status[MAX_REPLICATION];
     // must store both the client and the actual source, for the case when we
     // send an ack to the client from a non-primary server (all_recv+chain)
-    tw_lpid cli_lp, src_lp;
+    tw_lpid cli_lp;
     triton_cli_callback cli_cb;  // for client-server reqs
     rosd_callback_id    rosd_cb; // for server-server reqs
     struct qlist_head ql;
