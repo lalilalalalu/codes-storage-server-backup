@@ -14,7 +14,6 @@
 #include "codes/lp-msg.h"
 #include "codes/resource-lp.h"
 #include "rosd-creq.h"
-#include "rosd-common.h"
 
 #define ROSD_REQ_CONTROL_SZ 128
 

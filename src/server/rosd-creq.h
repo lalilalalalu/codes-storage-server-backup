@@ -10,9 +10,6 @@
 #include "../util/msg.h"
 #include "codes/lp-msg.h"
 
-
-#include "rosd-common.h"
-
 typedef struct rosd_pipelined_req rosd_pipelined_req;
 typedef struct rosd_pipelined_thread rosd_pipelined_thread;
 

@@ -4,7 +4,6 @@ src_libcodes_storage_server_a_SOURCES = \
 	src/codes-store-common.c \
 	src/client/codes-store-cli.c \
 	src/server/codes-store-lp.c \
-	src/server/rosd-common.h \
 	src/server/rosd-creq.c \
 	src/server/rosd-creq.h \
 	src/server/rosd.c \
