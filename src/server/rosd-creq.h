@@ -15,8 +15,6 @@ typedef struct rosd_pipelined_thread rosd_pipelined_thread;
 
 // threaded pipelining of request buffers
 struct rosd_pipelined_req {
-    // client request
-    request_params req;
     // remaining bytes of request, decremented when thread inits client rdma 
     // so we can properly determine some boundary conditions
     uint64_t rem;

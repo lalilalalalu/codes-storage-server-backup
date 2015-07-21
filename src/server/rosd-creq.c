@@ -32,7 +32,6 @@ rosd_pipelined_req* rosd_pipeline_init(
 
     r->punit_size = punit_size_max;
 
-    r->req = *req;
     r->rem = req->xfer_size;
     r->received = 0;
     r->committed = 0;

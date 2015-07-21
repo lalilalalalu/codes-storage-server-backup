@@ -488,8 +488,8 @@ void handle_pipeline_alloc_callback(
             tw_event *e = lsm_event_new(
                     ROSD_LP_NM,
                     lp->gid,
-                    p->req.oid,
-                    p->punit_size * chunk_id + p->req.xfer_offset,
+                    qi->req.oid,
+                    p->punit_size * chunk_id + qi->req.xfer_offset,
                     sz,
                     LSM_READ_REQUEST,
                     sizeof(triton_rosd_msg),
@@ -631,8 +631,8 @@ void handle_recv_chunk(
     tw_event *e_store = lsm_event_new(
             ROSD_LP_NM, 
             lp->gid,
-            p->req.oid,
-            p->punit_size * t->chunk_id + p->req.xfer_offset,
+            qi->req.oid,
+            p->punit_size * t->chunk_id + qi->req.xfer_offset,
             t->chunk_size,
             LSM_WRITE_REQUEST,
             sizeof(triton_rosd_msg),
@@ -878,7 +878,7 @@ void handle_complete_chunk_send(
         // if we are the last thread to send data to the client then ack
         if (p->forwarded == qi->req.xfer_size) {
             b->c2 = 1;
-            triton_send_response(&qi->cli_cb, &p->req, lp,
+            triton_send_response(&qi->cli_cb, &qi->req, lp,
                     model_net_id, ROSD_REQ_CONTROL_SZ, 0);
         }
         // if we are the last thread then cleanup req and ack to client
@@ -911,7 +911,7 @@ void handle_complete_chunk_send(
         tw_event *e = lsm_event_new(
                 ROSD_LP_NM,
                 lp->gid,
-                p->req.oid,
+                qi->req.oid,
                 p->punit_size * t->chunk_id + qi->req.xfer_offset,
                 chunk_sz,
                 LSM_READ_REQUEST,
