@@ -1,6 +1,6 @@
 check_PROGRAMS += tests/dummy tests/rosd-test-simple
 
-TESTS += tests/dummy tests/rosd-test-simple
+TESTS += tests/dummy tests/rosd-test-simple.sh
 
 tests_dummy_SOURCES = tests/dummy.c
 

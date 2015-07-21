@@ -28,7 +28,8 @@ enum test_client_event
 
 struct test_client_state
 {
-    int num_complete;
+    int num_complete_wr;
+    int num_complete_rd;
 };
 
 struct test_client_msg
@@ -37,17 +38,19 @@ struct test_client_msg
     triton_io_gresp g;
 };
 
-static void handle_test_client_next(
+static void next(
+        int is_write,
         struct test_client_state * ns,
         struct test_client_msg * m,
         tw_lp * lp)
 {
     triton_io_greq r;
+    int n = is_write ? ns->num_complete_wr : ns->num_complete_rd;
 
-    r.req.req_type = REQ_WRITE;
+    r.req.req_type = is_write ? REQ_WRITE : REQ_READ;
     r.req.create = 0;
     r.req.oid = 0;
-    r.req.xfer_offset = ns->num_complete * req_size;
+    r.req.xfer_offset = n * req_size;
     r.req.xfer_size = req_size;
 
     msg_set_header(test_client_magic, TEST_CLI_ACK, lp->gid,
@@ -59,7 +62,16 @@ static void handle_test_client_next(
 
     triton_send_request(&r, lp, cli_mn_id);
 
-    printf("sent request\n");
+    printf("%lu: sent %s request\n", lp->gid, is_write ? "write" : "read");
+}
+static void next_rc(
+        int is_write,
+        struct test_client_state *ns,
+        struct test_client_msg *m,
+        tw_lp *lp)
+{
+    triton_send_request_rev(req_size, lp, cli_mn_id);
+    printf("%lu: sent %s request (rc)\n", lp->gid, is_write ? "write" : "read");
 }
 
 
@@ -73,12 +85,42 @@ static void test_client_event(
 
     switch(m->h.event_type) {
         case TEST_CLI_ACK:
-            printf("received ack\n");
-            ns->num_complete++;
-            if (ns->num_complete < num_reqs)
-                handle_test_client_next(ns, m, lp);
-            else if (ns->num_complete > num_reqs) 
-                tw_error(TW_LOC, "received more acks than requests...");
+            printf("%lu: received ack\n", lp->gid);
+            if (ns->num_complete_wr == num_reqs) {
+                b->c0 = 1;
+                ns->num_complete_rd++;
+                if (ns->num_complete_rd < num_reqs)
+                    next(0, ns, m, lp);
+            }
+            else {
+                ns->num_complete_wr++;
+                b->c1 = ns->num_complete_wr < num_reqs;
+                next(b->c1, ns, m, lp);
+            }
+            break;
+        default:
+            assert(0);
+    }
+}
+static void test_client_event_rc(
+        struct test_client_state * ns,
+        tw_bf * b,
+        struct test_client_msg * m,
+        tw_lp * lp)
+{
+    assert(m->h.magic == test_client_magic);
+
+    switch(m->h.event_type) {
+        case TEST_CLI_ACK:
+            printf("%lu: received ack (rc)\n", lp->gid);
+            if (b->c0) {
+                next_rc(1, ns, m, lp);
+                ns->num_complete_rd--;
+            }
+            else {
+                next_rc(b->c1, ns, m, lp);
+                ns->num_complete_wr--;
+            }
             break;
         default:
             assert(0);
@@ -89,28 +131,30 @@ static void test_client_init(
         struct test_client_state * ns,
         tw_lp * lp)
 {
-    ns->num_complete = 0;
+    ns->num_complete_wr = 0;
+    ns->num_complete_rd = 0;
 }
 
 static void test_client_pre_run(
         struct test_client_state *ns,
         tw_lp *lp)
 {
-    handle_test_client_next(ns, NULL, lp);
+    next(1, ns, NULL, lp);
 }
 
 static void test_client_finalize(
         struct test_client_state *ns,
         tw_lp *lp)
 {
-    assert(ns->num_complete == num_reqs);
+    assert(ns->num_complete_wr == num_reqs);
+    assert(ns->num_complete_rd == num_reqs);
 }
 
 tw_lptype test_client_lp = {
     (init_f) test_client_init,
     (pre_run_f) test_client_pre_run,
     (event_f) test_client_event,
-    (revent_f) NULL,
+    (revent_f) test_client_event_rc,
     (final_f) test_client_finalize,
     (map_f) codes_mapping,
     sizeof(struct test_client_state),
