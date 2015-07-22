@@ -264,10 +264,6 @@ void triton_rosd_event_handler_rc(
         default:
             tw_error(TW_LOC, "unknown rosd event type");
     }
-
-    // reset b: ROSS doesn't guarantee bitfield resetting in the case of
-    // multiple rollbacks
-    *(int*)b = 0;
 }
 
 void triton_rosd_finalize(triton_rosd_state *ns, tw_lp *lp) {
@@ -305,9 +301,6 @@ void triton_rosd_finalize(triton_rosd_state *ns, tw_lp *lp) {
     lp_io_write(lp->gid, "rosd-stats", written, ns->output_buf);
 }
 
-// bitfields used:
-// c31 - alloc not called
-//
 // NOTE: assumes that there is an allocation to be performed
 static void pipeline_alloc_event(
         tw_bf *b,
@@ -346,11 +339,6 @@ static void pipeline_alloc_event(
             offsetof(triton_rosd_msg, u.palloc_callback.id), &id, lp);
 }
 
-/// this is the handler for both client-sourced requests and server-sourced
-/// - the logic is nearly the same, just need a few checks
-/// perform initial object checks, begin a pipelined operation
-// bitfields used:
-// - c0 - chunk metadata was created
 void handle_recv_io_req(
         triton_rosd_state * ns,
         tw_bf *b,
@@ -567,14 +555,6 @@ void handle_pipeline_alloc_callback(
     }
 }
 
-// bitfields used:
-// c0 - primary has received all of client's data and ack'd the client under 
-//      primary_recv mode
-// c1 - non-primary has received all of client's data
-// c2 - ack sent to client under all_recv+chain mode (from tail server)
-//      (assumes c1)
-// c3 - data recv ack sent to primary under all_recv+fan mode
-//      (assumes c1)
 void handle_recv_chunk(
         triton_rosd_state * ns,
         tw_bf *b,
@@ -642,11 +622,10 @@ void handle_recv_chunk(
 }
 
 // bitfields used:
-// c0 - client ack'd under primary_commit (after finishing disk op)
-// c1 - operation on data chunk complete (for write op)
-// c2 - assuming c1, thread had more work to do
-// c3 - assuming c1, thread has no more work and req is complete
-// c4 - assuming c1, last running thread -> cleanup performed
+// c0 - write - all committed, client ack'd
+// c1 - metadata op - client ack'd, cleanup done
+// c2 - thread had more work to do
+// c3 - !c2, last running thread -> cleanup performed
 static void handle_complete_disk_op(
         triton_rosd_state * ns,
         tw_bf *b,
@@ -679,7 +658,7 @@ static void handle_complete_disk_op(
                 ROSD_REQ_CONTROL_SZ, 0);
         qlist_del(&qi->ql);
         rc_stack_push(lp, qi, free_qitem, ns->finished_ops);
-        b->c4 = 1;
+        b->c1 = 1;
     }
     else {
         rosd_pipelined_req *p = qi->preq;
@@ -688,14 +667,7 @@ static void handle_complete_disk_op(
         lprintf("%lu: committed:%lu+%lu\n", lp->gid, p->committed,
                 t->chunk_size);
         p->committed += t->chunk_size;
-        // completion condition - primary_commit and all data has been
-        // committed
-        if (qi->req.req_type == REQ_WRITE &&
-                p->committed == qi->req.xfer_size){
-            b->c0 = 1;
-            triton_send_response(&qi->cli_cb, &qi->req, lp,
-                    model_net_id, ROSD_REQ_CONTROL_SZ, 0);
-        }
+
         // go ahead and set the rc variables, just in case
         m->u.complete_sto.rc.chunk_id = t->chunk_id;
         m->u.complete_sto.rc.chunk_size = t->chunk_size;
@@ -710,10 +682,16 @@ static void handle_complete_disk_op(
                     0, NULL, sizeof(m_loc), &m_loc, lp);
         }
         else {
-            // three cases to consider:
+            // two cases to consider:
             // - thread can pull more work from src
             // - no more work to do, but there are pending chunks
-            // - operation is fully complete - ack to client if primary
+
+            // first to see all committed data acks the client
+            if (p->committed == qi->req.xfer_size) {
+                b->c0 = 1;
+                triton_send_response(&qi->cli_cb, &qi->req, lp,
+                        model_net_id, ROSD_REQ_CONTROL_SZ, 0);
+            }
 
             // no more work to do
             if (p->rem == 0){
@@ -740,7 +718,7 @@ static void handle_complete_disk_op(
                     qlist_del(&qi->ql);
                     ns->bytes_written_local += p->committed;
                     rc_stack_push(lp, qi, free_qitem, ns->finished_ops);
-                    b->c4 = 1;
+                    b->c3 = 1;
                 }
             }
             else { // more work to do
@@ -881,8 +859,6 @@ void handle_complete_chunk_send(
     }
 }
 
-// bitfields used:
-// c31 - alloc not called
 static void pipeline_alloc_event_rc(
         tw_bf *b, 
         tw_lp *lp, 
@@ -1046,7 +1022,7 @@ static void handle_complete_disk_op_rc(
 
     // get the operation
     rosd_qitem *qi = NULL;
-    if (b->c4){
+    if (b->c1 || b->c3){
         // request was "deleted", put back into play
         qi = rc_stack_pop(ns->finished_ops);
         lprintf("%lu: add op %d (async compl %s rc)\n", lp->gid, qi->op_id,
@@ -1087,15 +1063,15 @@ static void handle_complete_disk_op_rc(
         lprintf("%lu: commit:%lu-%lu\n", lp->gid,
                 p->committed, prev_chunk_size);
         p->committed -= prev_chunk_size;
-        if (b->c0){
-            triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
-        }
 
         if (qi->req.req_type == REQ_READ){
             model_net_event_rc(model_net_id, lp, prev_chunk_size);
         }
         // else write && chunk op is complete
         else {
+            if (b->c0){
+                triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
+            }
             // thread pulled more data
             if (b->c2){
                 // note - previous derived chunk size is currently held in thread
