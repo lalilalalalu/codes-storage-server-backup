@@ -349,55 +349,46 @@ void handle_recv_io_req(
         triton_rosd_msg * m,
         tw_lp * lp){
 
+    // initialize a pipelining operation
+    rosd_qitem *qi = malloc(sizeof(rosd_qitem)); 
+    qi->op_id = ns->op_idx_pl++;
+    qi->req = m->u.creq.req;
+    qi->cli_lp = m->h.src;
+    qi->cli_cb = m->u.creq.callback;
+    qi->preq = NULL;
+    qlist_add_tail(&qi->ql, &ns->pending_ops);
+
+    // save op id for rc
+    m->u.creq.rc.op_id = qi->op_id;
+
+    lprintf("%lu: new req id:%d from %lu\n", lp->gid, qi->op_id, qi->cli_lp);
+
+    /* metadata op - avoid the pipelining events */
     if (m->u.creq.req.req_type == REQ_OPEN) {
         tw_event *e_local;
         triton_rosd_msg *m_local;
         rosd_callback_id cb_id;
-        rosd_qitem *qm = malloc(sizeof(*qm));
-        assert(qm);
 
-        qm->cli_lp = m->h.src;
-        qm->cli_cb = m->u.creq.callback;
-        qm->op_id = ns->op_idx_pl++;
-        qm->req = m->u.creq.req;
-        qm->preq = NULL;
-        cb_id.op_id = qm->op_id;
+        cb_id.op_id = qi->op_id;
         cb_id.tid = -1;
 
         /* in both cases, send the local disk op */
-        e_local = lsm_event_new("rosd", lp->gid, qm->req.oid, 0, 0,
-                (qm->req.create) ? LSM_WRITE_REQUEST : LSM_READ_REQUEST,
+        e_local = lsm_event_new("rosd", lp->gid, qi->req.oid, 0, 0,
+                (qi->req.create) ? LSM_WRITE_REQUEST : LSM_READ_REQUEST,
                 sizeof(*m_local), lp, 0.0);
         m_local = lsm_event_data(e_local);
         msg_set_header(rosd_magic, COMPLETE_DISK_OP, lp->gid, &m_local->h);
         m_local->u.complete_sto.id = cb_id;
         m_local->u.complete_sto.is_data_op = 0;
         tw_event_send(e_local);
-
-        // go ahead and push the partially complete op
-        qlist_add_tail(&qm->ql, &ns->pending_ops);
-
-        return;
     }
+    else {
+        qi->preq = rosd_pipeline_init(num_threads, pipeline_unit_size,
+                &m->u.creq.req, &m->u.creq.callback);
 
-    // initialize a pipelining operation
-    rosd_qitem *qi = malloc(sizeof(rosd_qitem)); 
-    qi->op_id = ns->op_idx_pl++;
-
-    // save op id for rc
-    m->u.creq.rc.op_id = qi->op_id;
-    // client->server request - full pipeline
-    qi->cli_lp = m->h.src;
-    qi->preq = rosd_pipeline_init(num_threads, pipeline_unit_size,
-            &m->u.creq.req, &m->u.creq.callback);
-    qi->req = m->u.creq.req;
-    qi->cli_cb = m->u.creq.callback;
-
-    lprintf("%lu: new req id:%d from %lu\n", lp->gid, qi->op_id, qi->cli_lp);
-    qlist_add_tail(&qi->ql, &ns->pending_ops);
-
-    // send the initial allocation event 
-    pipeline_alloc_event(b, lp, qi->op_id, qi->preq);
+        // send the initial allocation event 
+        pipeline_alloc_event(b, lp, qi->op_id, qi->preq);
+    }
 }
 
 // bitfields used:
@@ -643,49 +634,12 @@ void handle_recv_chunk(
 }
 
 // bitfields used:
-// - c0 - operation fully complete, causing request to be deleted
-static void handle_async_meta_completion(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp){
-    int id;
-    id = m->u.complete_sto.id.op_id;
-
-    // find the meta op
-    struct qlist_head *ent = NULL;
-    rosd_qitem *qi = NULL;
-    qlist_for_each(ent, &ns->pending_ops){
-        qi = qlist_entry(ent, rosd_qitem, ql);
-        if (qi->op_id == id){
-            break;
-        }
-    }
-    if (ent == &ns->pending_ops){
-        int written = sprintf(ns->output_buf,
-                "ERROR: meta op with id %d not found on LP %lu "
-                "(async_meta_completion,%s)", id, lp->gid,
-                m->h.event_type==COMPLETE_DISK_OP ? "disk" : "fwd");
-        lp_io_write(lp->gid, "errors", written, ns->output_buf);
-        ns->error_ct = 1;
-        return;
-    }
-
-    triton_send_response(&qi->cli_cb, &qi->req, lp, model_net_id,
-            ROSD_REQ_CONTROL_SZ, 0);
-
-    // this op is done, get "rid" of it
-    qlist_del(&qi->ql);
-    rc_stack_push(lp, qi, ns->finished_ops);
-}
-
-// bitfields used:
 // c0 - client ack'd under primary_commit (after finishing disk op)
 // c1 - operation on data chunk complete (for write op)
 // c2 - assuming c1, thread had more work to do
 // c3 - assuming c1, thread has no more work and req is complete
 // c4 - assuming c1, last running thread -> cleanup performed
-static void handle_async_completion(
+static void handle_complete_disk_op(
         triton_rosd_state * ns,
         tw_bf *b,
         triton_rosd_msg * m,
@@ -712,111 +666,107 @@ static void handle_async_completion(
         return;
     }
 
-    rosd_pipelined_req *p = qi->preq;
-    rosd_pipelined_thread *t = &p->threads[id->tid];
-
-    lprintf("%lu: committed:%lu+%lu\n", lp->gid, p->committed,
-            t->chunk_size);
-    p->committed += t->chunk_size;
-        // completion condition - primary_commit and all data has been
-        // committed
-    if (qi->req.req_type == REQ_WRITE &&
-            p->committed == qi->req.xfer_size){
-        b->c0 = 1;
-        triton_send_response(&qi->cli_cb, &qi->req, lp,
-                model_net_id, ROSD_REQ_CONTROL_SZ, 0);
-    }
-    // go ahead and set the rc variables, just in case
-    m->u.complete_sto.rc.chunk_id = t->chunk_id;
-    m->u.complete_sto.rc.chunk_size = t->chunk_size;
-
-    if (qi->req.req_type == REQ_READ){
-        /* send to client without a remote message and with a local "chunk
-         * done" message */
-        triton_rosd_msg m_loc;
-        msg_set_header(rosd_magic, COMPLETE_CHUNK_SEND, lp->gid, &m_loc.h);
-        m_loc.u.complete_chunk_send.id = *id;
-        model_net_event(model_net_id, "rosd", qi->cli_lp, t->chunk_size, 0.0,
-                0, NULL, sizeof(m_loc), &m_loc, lp);
+    if (!m->u.complete_sto.is_data_op) {
+        triton_send_response(&qi->cli_cb, &qi->req, lp, model_net_id,
+                ROSD_REQ_CONTROL_SZ, 0);
+        qlist_del(&qi->ql);
+        rc_stack_push(lp, qi, ns->finished_ops);
+        b->c4 = 1;
     }
     else {
-        // three cases to consider:
-        // - thread can pull more work from src
-        // - no more work to do, but there are pending chunks
-        // - operation is fully complete - ack to client if primary
+        rosd_pipelined_req *p = qi->preq;
+        rosd_pipelined_thread *t = &p->threads[id->tid];
 
-        // no more work to do
-        if (p->rem == 0){
-            // if we are the primary and no pending chunks, then 
-            // ack to client (under all_commit)
-            // NOTE: can't simply check if we're last active thread - others
-            // may be waiting on allocation still (single chunk requests)
+        lprintf("%lu: committed:%lu+%lu\n", lp->gid, p->committed,
+                t->chunk_size);
+        p->committed += t->chunk_size;
+        // completion condition - primary_commit and all data has been
+        // committed
+        if (qi->req.req_type == REQ_WRITE &&
+                p->committed == qi->req.xfer_size){
+            b->c0 = 1;
+            triton_send_response(&qi->cli_cb, &qi->req, lp,
+                    model_net_id, ROSD_REQ_CONTROL_SZ, 0);
+        }
+        // go ahead and set the rc variables, just in case
+        m->u.complete_sto.rc.chunk_id = t->chunk_id;
+        m->u.complete_sto.rc.chunk_size = t->chunk_size;
 
-            // "finalize" this thread
-            tprintf("%lu,%d: thread %d finished (msg %p) "
-                    "tid counts (%d, %d, %d+1) (rem:0)\n",
-                    lp->gid, qi->op_id, id->tid, m, p->nthreads_init,
-                    p->nthreads_alloc_waiting, p->nthreads_fin);
-            p->nthreads_fin++;
-            resource_lp_free(t->punit_size, lp);
-            // if we are the last thread then cleanup req
-            if (p->nthreads_fin == p->nthreads){
-                // just put onto queue, as reconstructing is just too
-                // difficult ATM
-                // TODO: mem mgmt
-                lprintf("%lu: rm op %d (async compl %s)\n", lp->gid,
-                        qi->op_id,
-                        m->h.event_type==COMPLETE_DISK_OP ? "disk":"fwd");
-                qlist_del(&qi->ql);
-                ns->bytes_written_local += p->committed;
-                rc_stack_push(lp, qi, ns->finished_ops);
-                b->c4 = 1;
+        if (qi->req.req_type == REQ_READ){
+            /* send to client without a remote message and with a local "chunk
+             * done" message */
+            triton_rosd_msg m_loc;
+            msg_set_header(rosd_magic, COMPLETE_CHUNK_SEND, lp->gid, &m_loc.h);
+            m_loc.u.complete_chunk_send.id = *id;
+            model_net_event(model_net_id, "rosd", qi->cli_lp, t->chunk_size, 0.0,
+                    0, NULL, sizeof(m_loc), &m_loc, lp);
+        }
+        else {
+            // three cases to consider:
+            // - thread can pull more work from src
+            // - no more work to do, but there are pending chunks
+            // - operation is fully complete - ack to client if primary
+
+            // no more work to do
+            if (p->rem == 0){
+                // if we are the primary and no pending chunks, then 
+                // ack to client (under all_commit)
+                // NOTE: can't simply check if we're last active thread - others
+                // may be waiting on allocation still (single chunk requests)
+
+                // "finalize" this thread
+                tprintf("%lu,%d: thread %d finished (msg %p) "
+                        "tid counts (%d, %d, %d+1) (rem:0)\n",
+                        lp->gid, qi->op_id, id->tid, m, p->nthreads_init,
+                        p->nthreads_alloc_waiting, p->nthreads_fin);
+                p->nthreads_fin++;
+                resource_lp_free(t->punit_size, lp);
+                // if we are the last thread then cleanup req
+                if (p->nthreads_fin == p->nthreads){
+                    // just put onto queue, as reconstructing is just too
+                    // difficult ATM
+                    // TODO: mem mgmt
+                    lprintf("%lu: rm op %d (async compl %s)\n", lp->gid,
+                            qi->op_id,
+                            m->h.event_type==COMPLETE_DISK_OP ? "disk":"fwd");
+                    qlist_del(&qi->ql);
+                    ns->bytes_written_local += p->committed;
+                    rc_stack_push(lp, qi, ns->finished_ops);
+                    b->c4 = 1;
+                }
+            }
+            else { // more work to do
+                b->c2 = 1;
+                // compute new chunk size
+                uint64_t chunk_sz = p->punit_size > p->rem ? 
+                    p->rem : p->punit_size;
+                tprintf("%lu,%d: thread %d given chunk %d (msg %p)"
+                        "tid counts (%d, %d, %d) rem %lu-%lu\n",
+                        lp->gid, qi->op_id, id->tid, 
+                        p->thread_chunk_id_curr, m,
+                        p->nthreads_init,
+                        p->nthreads_alloc_waiting, p->nthreads_fin,
+                        p->rem, chunk_sz);
+                t->chunk_id = p->thread_chunk_id_curr++;
+                t->chunk_size = chunk_sz;
+                lprintf("%lu: async-compl rem:%lu-%lu\n", lp->gid,
+                        p->rem, chunk_sz);
+                p->rem -= chunk_sz;
+
+                // setup, send message
+                triton_rosd_msg m_recv;
+                msg_set_header(rosd_magic, RECV_CHUNK, qi->cli_lp, &m_recv.h);
+                m_recv.u.recv_chunk.id = *id;
+                // control message gets high priority
+                int prio = 0;
+                model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
+                        (void*) &prio);
+                model_net_pull_event(model_net_id, "rosd", qi->cli_lp, chunk_sz,
+                        0.0, sizeof(triton_rosd_msg), &m_recv, lp);
+                lprintf("%lu: pull req to %lu\n", lp->gid, qi->cli_lp);
             }
         }
-        else { // more work to do
-            b->c2 = 1;
-            // compute new chunk size
-            uint64_t chunk_sz = p->punit_size > p->rem ? 
-                p->rem : p->punit_size;
-            tprintf("%lu,%d: thread %d given chunk %d (msg %p)"
-                    "tid counts (%d, %d, %d) rem %lu-%lu\n",
-                    lp->gid, qi->op_id, id->tid, 
-                    p->thread_chunk_id_curr, m,
-                    p->nthreads_init,
-                    p->nthreads_alloc_waiting, p->nthreads_fin,
-                    p->rem, chunk_sz);
-            t->chunk_id = p->thread_chunk_id_curr++;
-            t->chunk_size = chunk_sz;
-            lprintf("%lu: async-compl rem:%lu-%lu\n", lp->gid,
-                    p->rem, chunk_sz);
-            p->rem -= chunk_sz;
-
-            // setup, send message
-            triton_rosd_msg m_recv;
-            msg_set_header(rosd_magic, RECV_CHUNK, qi->cli_lp, &m_recv.h);
-            m_recv.u.recv_chunk.id = *id;
-            // control message gets high priority
-            int prio = 0;
-            model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
-                    (void*) &prio);
-            model_net_pull_event(model_net_id, "rosd", qi->cli_lp, chunk_sz,
-                    0.0, sizeof(triton_rosd_msg), &m_recv, lp);
-            lprintf("%lu: pull req to %lu\n", lp->gid, qi->cli_lp);
-        }
     }
-
-    MN_END_SEQ();
-}
-
-void handle_complete_disk_op(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp){
-    if (m->u.complete_sto.is_data_op)
-        handle_async_completion(ns, b, m, lp);
-    else
-        handle_async_meta_completion(ns, b, m, lp);
 }
 
 // bitfields used:
@@ -943,25 +893,6 @@ void handle_recv_io_req_rc(
 
     int op_id_prev = m->u.creq.rc.op_id;
 
-    if (m->u.creq.req.req_type == REQ_OPEN) {
-        // find the related request or die trying
-        rosd_qitem *qm = NULL;
-        struct qlist_head *ent;
-        assert(!qlist_empty(&ns->pending_ops));
-        qlist_for_each(ent, &ns->pending_ops) {
-            qm = qlist_entry(ent, rosd_qitem, ql);
-            if (qm->op_id == op_id_prev)
-                break;
-        }
-        assert(ent != &ns->pending_ops);
-        qlist_del(ent);
-
-        lsm_event_new_reverse(lp);
-
-        free(qm);
-        return;
-    }
-
     // find the queue item (removal from list can be from any location, rc
     // pushes it back to the back, so we have to iterate)
     struct qlist_head *qitem_ent;
@@ -974,12 +905,19 @@ void handle_recv_io_req_rc(
     }
     assert(qitem_ent != &ns->pending_ops);
 
-    // before doing cleanups (free(...)), reverse the alloc event
-    pipeline_alloc_event_rc(b, lp, op_id_prev, qi->preq);
-
     lprintf("%lu: new req rc id:%d from %lu\n", lp->gid, qi->op_id, qi->cli_lp);
+
+    if (m->u.creq.req.req_type == REQ_OPEN) {
+        lsm_event_new_reverse(lp);
+        return;
+    }
+    else {
+        // before doing cleanups (free(...)), reverse the alloc event
+        pipeline_alloc_event_rc(b, lp, op_id_prev, qi->preq);
+        rosd_pipeline_destroy(qi->preq);
+    }
+
     qlist_del(qitem_ent);
-    rosd_pipeline_destroy(qi->preq);
     free(qi);
 }
 
@@ -1088,35 +1026,7 @@ void handle_recv_chunk_rc(
     qi->preq->received -= t->chunk_size;
 }
 
-static void handle_async_meta_completion_rc(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp){
-    int id;
-    id = m->u.complete_sto.id.op_id;
-
-    rosd_qitem *qi;
-    if (b->c0) {
-        qi = rc_stack_pop(ns->finished_ops);
-        assert(qi != NULL);
-    }
-    else {
-        struct qlist_head *ent;
-        qlist_for_each(ent, &ns->pending_ops) {
-            qi = qlist_entry(ent, rosd_qitem, ql);
-            if (qi->op_id == id)
-                break;
-        }
-        assert(ent != &ns->pending_ops);
-    }
-
-    qlist_add_tail(&qi->ql, &ns->pending_ops);
-
-    triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
-}
-
-static void handle_async_completion_rc(
+static void handle_complete_disk_op_rc(
         triton_rosd_state * ns,
         tw_bf *b,
         triton_rosd_msg * m,
@@ -1135,7 +1045,8 @@ static void handle_async_completion_rc(
                 m->h.event_type==COMPLETE_DISK_OP ? "disk" : "fwd");
         qlist_add_tail(&qi->ql, &ns->pending_ops);
         // undo the stats
-        ns->bytes_written_local -= qi->preq->committed;
+        if (m->u.complete_sto.is_data_op)
+            ns->bytes_written_local -= qi->preq->committed;
     }
     else{
         struct qlist_head *ent = NULL;
@@ -1148,74 +1059,68 @@ static void handle_async_completion_rc(
         assert(ent != &ns->pending_ops);
     }
 
-    rosd_pipelined_req *p = qi->preq;
-    rosd_pipelined_thread *t = &p->threads[id->tid];
-
-    // set the chunk rc parameters
-    if (!b->c2){ //chunk size wasn't overwritten, grab it from the thread
-        prev_chunk_size = t->chunk_size;
-        prev_chunk_id = -1; // unused
-    }
-    else {
-        prev_chunk_size = m->u.complete_sto.rc.chunk_size;
-        prev_chunk_id   = m->u.complete_sto.rc.chunk_id;
-    }
-
-    lprintf("%lu: commit:%lu-%lu\n", lp->gid,
-            p->committed, prev_chunk_size);
-    p->committed -= prev_chunk_size;
-    if (b->c0){
+    if (!m->u.complete_sto.is_data_op) {
         triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
     }
-
-    if (qi->req.req_type == REQ_READ){
-        model_net_event_rc(model_net_id, lp, prev_chunk_size);
-    }
-    // else write && chunk op is complete
     else {
-        // thread pulled more data
-        if (b->c2){
-            // note - previous derived chunk size is currently held in thread
-            tprintf("%lu,%d: thread %d given chunk rc %d (msg %p), "
-                    "tid counts (%d, %d, %d), rem %lu+%lu\n",
-                    lp->gid, qi->op_id, id->tid, t->chunk_id,
-                    m,
-                    p->nthreads_init,
-                    p->nthreads_alloc_waiting, 
-                    p->nthreads_fin,
-                    p->rem, t->chunk_size);
-            lprintf("%lu: async-compl rc rem:%lu+%lu\n", lp->gid,
-                    p->rem, t->chunk_size);
-            p->rem += t->chunk_size;
-            p->thread_chunk_id_curr--;
-            t->chunk_size = prev_chunk_size;
-            t->chunk_id   = prev_chunk_id;
+        rosd_pipelined_req *p = qi->preq;
+        rosd_pipelined_thread *t = &p->threads[id->tid];
 
-            // we 'un-cleared' earlier, so nothing to do here
-
-            model_net_pull_event_rc(model_net_id, lp);
+        // set the chunk rc parameters
+        if (!b->c2){ //chunk size wasn't overwritten, grab it from the thread
+            prev_chunk_size = t->chunk_size;
+            prev_chunk_id = -1; // unused
         }
-        else{
-            tprintf("%lu,%d: thread %d finished rc (msg %p), "
-                    "tid counts (%d, %d, %d-1)\n",
-                    lp->gid, qi->op_id, id->tid, m, p->nthreads_init,
-                    p->nthreads_alloc_waiting, p->nthreads_fin);
-            p->nthreads_fin--;
-            resource_lp_free_rc(lp);
-            // reversal of deletion occurred earlier
+        else {
+            prev_chunk_size = m->u.complete_sto.rc.chunk_size;
+            prev_chunk_id   = m->u.complete_sto.rc.chunk_id;
+        }
+
+        lprintf("%lu: commit:%lu-%lu\n", lp->gid,
+                p->committed, prev_chunk_size);
+        p->committed -= prev_chunk_size;
+        if (b->c0){
+            triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
+        }
+
+        if (qi->req.req_type == REQ_READ){
+            model_net_event_rc(model_net_id, lp, prev_chunk_size);
+        }
+        // else write && chunk op is complete
+        else {
+            // thread pulled more data
+            if (b->c2){
+                // note - previous derived chunk size is currently held in thread
+                tprintf("%lu,%d: thread %d given chunk rc %d (msg %p), "
+                        "tid counts (%d, %d, %d), rem %lu+%lu\n",
+                        lp->gid, qi->op_id, id->tid, t->chunk_id,
+                        m,
+                        p->nthreads_init,
+                        p->nthreads_alloc_waiting, 
+                        p->nthreads_fin,
+                        p->rem, t->chunk_size);
+                lprintf("%lu: async-compl rc rem:%lu+%lu\n", lp->gid,
+                        p->rem, t->chunk_size);
+                p->rem += t->chunk_size;
+                p->thread_chunk_id_curr--;
+                t->chunk_size = prev_chunk_size;
+                t->chunk_id   = prev_chunk_id;
+
+                // we 'un-cleared' earlier, so nothing to do here
+
+                model_net_pull_event_rc(model_net_id, lp);
+            }
+            else{
+                tprintf("%lu,%d: thread %d finished rc (msg %p), "
+                        "tid counts (%d, %d, %d-1)\n",
+                        lp->gid, qi->op_id, id->tid, m, p->nthreads_init,
+                        p->nthreads_alloc_waiting, p->nthreads_fin);
+                p->nthreads_fin--;
+                resource_lp_free_rc(lp);
+                // reversal of deletion occurred earlier
+            }
         }
     }
-}
-
-void handle_complete_disk_op_rc(
-        triton_rosd_state * ns,
-        tw_bf *b,
-        triton_rosd_msg * m,
-        tw_lp * lp){
-    if (m->u.complete_sto.is_data_op)
-        handle_async_completion_rc(ns, b, m, lp);
-    else
-        handle_async_meta_completion_rc(ns, b, m, lp);
 }
 
 void handle_complete_chunk_send_rc(
