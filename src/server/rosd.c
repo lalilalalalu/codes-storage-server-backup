@@ -54,6 +54,14 @@ static int pipeline_unit_size = (1<<22);
 int do_rosd_lp_io = 0;
 lp_io_handle rosd_io_handle;
 
+/* for rc-stack: free fn for pipeline_qitem */
+static void free_qitem(void * ptr)
+{
+    rosd_qitem *qi = ptr;
+    if (qi->preq) rosd_pipeline_destroy(qi->preq);
+    free(qi);
+}
+
 ///// BEGIN LP, EVENT PROCESSING FUNCTION DECLS /////
 
 // ROSS LP processing functions
@@ -195,7 +203,7 @@ void triton_rosd_event_handler(
     }
 
     /* perform a garbage collection */
-    rc_stack_gc(lp, 1, ns->finished_ops);
+    rc_stack_gc(lp, ns->finished_ops);
 
     switch (m->h.event_type){
         case RECV_CLI_REQ:
@@ -263,7 +271,7 @@ void triton_rosd_event_handler_rc(
 }
 
 void triton_rosd_finalize(triton_rosd_state *ns, tw_lp *lp) {
-    rc_stack_destroy(1, ns->finished_ops);
+    rc_stack_destroy(ns->finished_ops);
 
     // check for pending operations that did not complete or were not removed
     struct qlist_head *ent;
@@ -552,7 +560,7 @@ void handle_pipeline_alloc_callback(
             }
             lprintf("%lu: rm req %d (alloc_callback)\n", lp->gid, qi->op_id);
             // RC: hold on to queued-up item (TODO: mem mgmt)
-            rc_stack_push(lp, qi, ns->finished_ops);
+            rc_stack_push(lp, qi, free_qitem, ns->finished_ops);
             b->c3 = 1;
         }
         return;
@@ -670,7 +678,7 @@ static void handle_complete_disk_op(
         triton_send_response(&qi->cli_cb, &qi->req, lp, model_net_id,
                 ROSD_REQ_CONTROL_SZ, 0);
         qlist_del(&qi->ql);
-        rc_stack_push(lp, qi, ns->finished_ops);
+        rc_stack_push(lp, qi, free_qitem, ns->finished_ops);
         b->c4 = 1;
     }
     else {
@@ -731,7 +739,7 @@ static void handle_complete_disk_op(
                             m->h.event_type==COMPLETE_DISK_OP ? "disk":"fwd");
                     qlist_del(&qi->ql);
                     ns->bytes_written_local += p->committed;
-                    rc_stack_push(lp, qi, ns->finished_ops);
+                    rc_stack_push(lp, qi, free_qitem, ns->finished_ops);
                     b->c4 = 1;
                 }
             }
@@ -833,7 +841,7 @@ void handle_complete_chunk_send(
             ns->bytes_read_local += p->committed;
             lprintf("%lu: rm op %d (compl chunk send)\n", lp->gid, qi->op_id);
             qlist_del(&qi->ql);
-            rc_stack_push(lp, qi, ns->finished_ops);
+            rc_stack_push(lp, qi, free_qitem, ns->finished_ops);
         }
         // else other threads still running, do nothing
     }
