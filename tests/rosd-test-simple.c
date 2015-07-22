@@ -21,8 +21,6 @@ static tw_stime s_to_ns(tw_stime s)
 static char conf_file_name[256] = {'\0'};
 static char lp_io_dir[256] = {'\0'};
 static unsigned int lp_io_use_suffix = 0;
-// needs to be non-extern cuz of ugly bugs
-int model_net_id = 0;
 
 const tw_optdef app_opt[] = {
     TWOPT_GROUP("ROSD mock test model"),
@@ -35,6 +33,7 @@ const tw_optdef app_opt[] = {
 int main(int argc, char * argv[])
 {
     int num_nets, *net_ids;
+    int model_net_id;
 
     g_tw_ts_end = s_to_ns(60*60*24*365); /* one year, in nsecs */
 
@@ -80,7 +79,7 @@ int main(int argc, char * argv[])
     /* after the mapping configuration is loaded, let LPs parse the
      * configuration information. This is done so that LPs have access to
      * the codes_mapping interface for getting LP counts and such */
-    rosd_configure();
+    rosd_configure(model_net_id);
     resource_lp_configure();
     lsm_configure();
     test_client_configure(model_net_id);

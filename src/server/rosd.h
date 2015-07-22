@@ -142,7 +142,7 @@ struct triton_rosd_state {
 // registers the lp type with ross
 void rosd_register();
 // configures the lp given the global config object
-void rosd_configure();
+void rosd_configure(int model_net_id);
 
 #endif
 

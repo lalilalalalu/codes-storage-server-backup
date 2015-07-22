@@ -44,7 +44,7 @@
 
 int rosd_magic = 0;
 
-extern int model_net_id;
+static int mn_id;
 
 /* system parameters */
 static int num_threads = 4;
@@ -154,11 +154,13 @@ void rosd_register()
     lp_type_register(ROSD_LP_NM, &triton_rosd_lp);
 }
 
-void rosd_configure(){
+void rosd_configure(int model_net_id){
     uint32_t h1=0, h2=0;
 
     bj_hashlittle2(ROSD_LP_NM, strlen(ROSD_LP_NM), &h1, &h2);
     rosd_magic = h1+h2;
+
+    mn_id = model_net_id;
 
     /* until we get rid of RF logic... */
     int rc;
@@ -463,7 +465,7 @@ void handle_pipeline_alloc_callback(
             int prio = 0;
             model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
                     (void*) &prio);
-            model_net_pull_event(model_net_id, "rosd", qi->cli_lp,
+            model_net_pull_event(mn_id, "rosd", qi->cli_lp,
                     sz, 0.0, sizeof(triton_rosd_msg), &m_recv, lp);
         }
         else if (qi->req.req_type == REQ_READ) {
@@ -654,7 +656,7 @@ static void handle_complete_disk_op(
     }
 
     if (!m->u.complete_sto.is_data_op) {
-        triton_send_response(&qi->cli_cb, &qi->req, lp, model_net_id,
+        triton_send_response(&qi->cli_cb, &qi->req, lp, mn_id,
                 ROSD_REQ_CONTROL_SZ, 0);
         qlist_del(&qi->ql);
         rc_stack_push(lp, qi, free_qitem, ns->finished_ops);
@@ -678,7 +680,7 @@ static void handle_complete_disk_op(
             triton_rosd_msg m_loc;
             msg_set_header(rosd_magic, COMPLETE_CHUNK_SEND, lp->gid, &m_loc.h);
             m_loc.u.complete_chunk_send.id = *id;
-            model_net_event(model_net_id, "rosd", qi->cli_lp, t->chunk_size, 0.0,
+            model_net_event(mn_id, "rosd", qi->cli_lp, t->chunk_size, 0.0,
                     0, NULL, sizeof(m_loc), &m_loc, lp);
         }
         else {
@@ -690,7 +692,7 @@ static void handle_complete_disk_op(
             if (p->committed == qi->req.xfer_size) {
                 b->c0 = 1;
                 triton_send_response(&qi->cli_cb, &qi->req, lp,
-                        model_net_id, ROSD_REQ_CONTROL_SZ, 0);
+                        mn_id, ROSD_REQ_CONTROL_SZ, 0);
             }
 
             // no more work to do
@@ -747,7 +749,7 @@ static void handle_complete_disk_op(
                 int prio = 0;
                 model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
                         (void*) &prio);
-                model_net_pull_event(model_net_id, "rosd", qi->cli_lp, chunk_sz,
+                model_net_pull_event(mn_id, "rosd", qi->cli_lp, chunk_sz,
                         0.0, sizeof(triton_rosd_msg), &m_recv, lp);
                 lprintf("%lu: pull req to %lu\n", lp->gid, qi->cli_lp);
             }
@@ -811,7 +813,7 @@ void handle_complete_chunk_send(
         if (p->forwarded == qi->req.xfer_size) {
             b->c2 = 1;
             triton_send_response(&qi->cli_cb, &qi->req, lp,
-                    model_net_id, ROSD_REQ_CONTROL_SZ, 0);
+                    mn_id, ROSD_REQ_CONTROL_SZ, 0);
         }
         // if we are the last thread then cleanup req and ack to client
         if (p->nthreads_fin == p->nthreads) {
@@ -955,7 +957,7 @@ void handle_pipeline_alloc_callback_rc(
         p->threads[tid].chunk_id = -1;
 
         if (qi->req.req_type == REQ_WRITE)
-            model_net_pull_event_rc(model_net_id, lp);
+            model_net_pull_event_rc(mn_id, lp);
         else if (qi->req.req_type == REQ_READ)
             lsm_event_new_reverse(lp);
         else { assert(0); }
@@ -1044,7 +1046,7 @@ static void handle_complete_disk_op_rc(
     }
 
     if (!m->u.complete_sto.is_data_op) {
-        triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
+        triton_send_response_rev(lp, mn_id, ROSD_REQ_CONTROL_SZ);
     }
     else {
         rosd_pipelined_req *p = qi->preq;
@@ -1065,12 +1067,12 @@ static void handle_complete_disk_op_rc(
         p->committed -= prev_chunk_size;
 
         if (qi->req.req_type == REQ_READ){
-            model_net_event_rc(model_net_id, lp, prev_chunk_size);
+            model_net_event_rc(mn_id, lp, prev_chunk_size);
         }
         // else write && chunk op is complete
         else {
             if (b->c0){
-                triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
+                triton_send_response_rev(lp, mn_id, ROSD_REQ_CONTROL_SZ);
             }
             // thread pulled more data
             if (b->c2){
@@ -1092,7 +1094,7 @@ static void handle_complete_disk_op_rc(
 
                 // we 'un-cleared' earlier, so nothing to do here
 
-                model_net_pull_event_rc(model_net_id, lp);
+                model_net_pull_event_rc(mn_id, lp);
             }
             else{
                 tprintf("%lu,%d: thread %d finished rc (msg %p), "
@@ -1143,7 +1145,7 @@ void handle_complete_chunk_send_rc(
         p->nthreads_fin--;
         resource_lp_free_rc(lp);
         if (b->c2)
-            triton_send_response_rev(lp, model_net_id, ROSD_REQ_CONTROL_SZ);
+            triton_send_response_rev(lp, mn_id, ROSD_REQ_CONTROL_SZ);
     }
     else {
         p->rem += t->chunk_size;
