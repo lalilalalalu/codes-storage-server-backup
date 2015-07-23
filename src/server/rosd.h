@@ -112,33 +112,6 @@ struct rosd_qitem {
     struct qlist_head ql;
 };
 
-// NOTE: this should not be used by general users, it is only defined here so
-// that the forwarding protocol has access to it
-struct triton_rosd_state {
-    // my logical (not lp) id
-    int server_index;
-
-    struct qlist_head pending_ops;
-    struct rc_stack * finished_ops;
-
-    // unique (not reused on reverse-comp) identifiers for
-    // requests
-    int op_idx_pl;
-
-    // stats
-    // stats: bytes 
-    // - written locally 
-    // - read locally 
-    unsigned long bytes_written_local;
-    unsigned long bytes_read_local;
-
-    // number of errors we have encountered (for self-suspend)
-    int error_ct;
-
-    // scratch output buffer (for lpio)
-    char output_buf[256];
-};
-
 // registers the lp type with ross
 void rosd_register();
 // configures the lp given the global config object

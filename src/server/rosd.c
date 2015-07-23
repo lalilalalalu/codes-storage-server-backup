@@ -20,9 +20,6 @@
 #include "rosd.h"
 #include "rosd-creq.h"
 
-/* TODO: rm me */
-#define ROSD_LP_NM "rosd"
-
 /// danger: debug messages will produce a LOT of output, even for small runs
 /// and especially in optimistic runs
 
@@ -64,6 +61,31 @@ static void free_qitem(void * ptr)
     if (qi->preq) rosd_pipeline_destroy(qi->preq);
     free(qi);
 }
+
+struct triton_rosd_state {
+    // my logical (not lp) id
+    int server_index;
+
+    struct qlist_head pending_ops;
+    struct rc_stack * finished_ops;
+
+    // unique (not reused on reverse-comp) identifiers for
+    // requests
+    int op_idx_pl;
+
+    // stats
+    // stats: bytes 
+    // - written locally 
+    // - read locally 
+    unsigned long bytes_written_local;
+    unsigned long bytes_read_local;
+
+    // number of errors we have encountered (for self-suspend)
+    int error_ct;
+
+    // scratch output buffer (for lpio)
+    char output_buf[256];
+};
 
 ///// BEGIN LP, EVENT PROCESSING FUNCTION DECLS /////
 
@@ -154,13 +176,13 @@ static uint64_t minu64(uint64_t a, uint64_t b) { return a < b ? a : b; }
 
 void rosd_register()
 {
-    lp_type_register(ROSD_LP_NM, &triton_rosd_lp);
+    lp_type_register(CODES_STORE_LP_NAME, &triton_rosd_lp);
 }
 
 void rosd_configure(int model_net_id){
     uint32_t h1=0, h2=0;
 
-    bj_hashlittle2(ROSD_LP_NM, strlen(ROSD_LP_NM), &h1, &h2);
+    bj_hashlittle2(CODES_STORE_LP_NAME, strlen(CODES_STORE_LP_NAME), &h1, &h2);
     rosd_magic = h1+h2;
 
     mn_id = model_net_id;
@@ -171,10 +193,10 @@ void rosd_configure(int model_net_id){
     // get the number of threads and the pipeline buffer size
     // if not available, no problem - use a default of 4 threads, 4MB per
     // thread
-    rc = configuration_get_value_int(&config, ROSD_LP_NM, "req_threads", 
-            NULL, &num_threads);
-    rc = configuration_get_value_int(&config, ROSD_LP_NM, "thread_buf_sz",
-            NULL, &pipeline_unit_size);
+    rc = configuration_get_value_int(&config, CODES_STORE_LP_NAME,
+            "req_threads", NULL, &num_threads);
+    rc = configuration_get_value_int(&config, CODES_STORE_LP_NAME,
+            "thread_buf_sz", NULL, &pipeline_unit_size);
 
     /* done!!! */
 }
@@ -509,7 +531,7 @@ void handle_pipeline_alloc_callback(
         else if (qi->req.type == CSREQ_READ) {
             // direct read
             tw_event *e = lsm_event_new(
-                    ROSD_LP_NM,
+                    CODES_STORE_LP_NAME,
                     lp->gid,
                     qi->req.oid,
                     p->punit_size * chunk_id + qi->req.xfer_offset,
@@ -645,7 +667,7 @@ void handle_recv_chunk(
             p->punit_size * t->chunk_id + qi->req.xfer_offset,
             t->chunk_size);
     tw_event *e_store = lsm_event_new(
-            ROSD_LP_NM, 
+            CODES_STORE_LP_NAME, 
             lp->gid,
             qi->req.oid,
             p->punit_size * t->chunk_id + qi->req.xfer_offset,
@@ -881,7 +903,7 @@ void handle_complete_chunk_send(
 
         // do a read
         tw_event *e = lsm_event_new(
-                ROSD_LP_NM,
+                CODES_STORE_LP_NAME,
                 lp->gid,
                 qi->req.oid,
                 p->punit_size * t->chunk_id + qi->req.xfer_offset,

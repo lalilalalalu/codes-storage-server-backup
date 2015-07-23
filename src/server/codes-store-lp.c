@@ -15,8 +15,7 @@
 
 #include "rosd.h"
 
-/* change this once we do the big name change of '03 */
-char const * const CODES_STORE_LP_NAME = "rosd";
+char const * const CODES_STORE_LP_NAME = "codes-store";
 
 void codes_store_init_req(
         enum codes_store_req_type type,
