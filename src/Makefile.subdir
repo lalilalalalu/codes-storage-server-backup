@@ -6,6 +6,4 @@ src_libcodes_storage_server_a_SOURCES = \
 	src/server/rosd-creq.c \
 	src/server/rosd-creq.h \
 	src/server/rosd.c \
-	src/server/rosd.h \
-	src/util/map_util.c \
-	src/util/map_util.h
+	src/server/rosd.h

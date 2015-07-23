@@ -19,7 +19,9 @@
 
 #include "rosd.h"
 #include "rosd-creq.h"
-#include "../util/map_util.h"
+
+/* TODO: rm me */
+#define ROSD_LP_NM "rosd"
 
 /// danger: debug messages will produce a LOT of output, even for small runs
 /// and especially in optimistic runs
@@ -214,7 +216,7 @@ void codes_store_send_resp_rc(tw_lp *lp)
 
 
 void triton_rosd_init(triton_rosd_state *ns, tw_lp *lp) {
-    ns->server_index = get_rosd_index(lp->gid);
+    ns->server_index = codes_mapping_get_lp_relative_id(lp->gid, 0, 0);
 
     INIT_QLIST_HEAD(&ns->pending_ops);
     rc_stack_create(&ns->finished_ops);
