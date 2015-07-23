@@ -24,25 +24,19 @@
 /// and especially in optimistic runs
 
 // thread specific debug messages (producing a finer-grain log)
-#define ROSD_THREAD_DBG 0
-#if ROSD_THREAD_DBG
-#define tprintf(_fmt, ...) printf(_fmt, __VA_ARGS__)
-#else
-#define tprintf(_fmt, ...)
-#endif
+#define CS_THREAD_DBG 0
+#define tprintf(_fmt, ...) \
+    do {if (CS_THREAD_DBG) printf(_fmt, __VA_ARGS__);} while (0)
 
 // lp specific debug messages (producing a coarser-grain log)
-#define ROSD_LP_DBG 0
-#if ROSD_LP_DBG
-#define lprintf(_fmt, ...) printf(_fmt, __VA_ARGS__)
-#else
-#define lprintf(_fmt, ...)
-#endif
+#define CS_LP_DBG 0
+#define lprintf(_fmt, ...) \
+    do {if (CS_THREAD_DBG) printf(_fmt, __VA_ARGS__);} while (0)
 
 // print rng stats at end (messes up some results scripts)
-#define ROSD_PRINT_RNG 0
+#define CS_PRINT_RNG 0
 
-int rosd_magic = 0;
+int cs_magic = 0;
 
 static int mn_id;
 
@@ -53,12 +47,12 @@ static int pipeline_unit_size = (1<<22);
 /* for rc-stack: free fn for pipeline_qitem */
 static void free_qitem(void * ptr)
 {
-    rosd_qitem *qi = ptr;
-    if (qi->preq) rosd_pipeline_destroy(qi->preq);
+    cs_qitem *qi = ptr;
+    if (qi->preq) cs_pipeline_destroy(qi->preq);
     free(qi);
 }
 
-struct triton_rosd_state {
+struct cs_state {
     // my logical (not lp) id
     int server_index;
 
@@ -83,87 +77,89 @@ struct triton_rosd_state {
     char output_buf[256];
 };
 
+typedef struct cs_state cs_state;
+
 ///// BEGIN LP, EVENT PROCESSING FUNCTION DECLS /////
 
 // ROSS LP processing functions
-static void triton_rosd_init(triton_rosd_state *ns, tw_lp *lp);
-static void triton_rosd_event_handler(
-        triton_rosd_state * ns,
+static void cs_init(cs_state *ns, tw_lp *lp);
+static void cs_event_handler(
+        cs_state * ns,
         tw_bf * b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp);
-static void triton_rosd_event_handler_rc(
-        triton_rosd_state * ns,
+static void cs_event_handler_rc(
+        cs_state * ns,
         tw_bf * b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp);
-static void triton_rosd_finalize(triton_rosd_state *ns, tw_lp *lp);
+static void cs_finalize(cs_state *ns, tw_lp *lp);
 
 // event handlers
 static void handle_recv_io_req(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp);
 static void handle_pipeline_alloc_callback(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp);
 static void handle_recv_chunk(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp);
 static void handle_complete_disk_op(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp);
 static void handle_complete_chunk_send(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp);
 
 static void handle_recv_io_req_rc(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp);
 static void handle_pipeline_alloc_callback_rc(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp);
 static void handle_recv_chunk_rc(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp);
 static void handle_complete_disk_op_rc(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp);
 static void handle_complete_chunk_send_rc(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp);
 
 ///// END LP, EVENT PROCESSING FUNCTION DECLS /////
 
 ///// BEGIN SIMULATION DATA STRUCTURES /////
 
-tw_lptype triton_rosd_lp = {
-    (init_f) triton_rosd_init,
+tw_lptype cs_lp = {
+    (init_f) cs_init,
     (pre_run_f) NULL,
-    (event_f) triton_rosd_event_handler,
-    (revent_f) triton_rosd_event_handler_rc,
-    (final_f) triton_rosd_finalize,
+    (event_f) cs_event_handler,
+    (revent_f) cs_event_handler_rc,
+    (final_f) cs_finalize,
     (map_f) codes_mapping,
-    sizeof(triton_rosd_state),
+    sizeof(cs_state),
 };
 
 ///// END SIMULATION DATA STRUCTURES /////
@@ -172,14 +168,14 @@ static uint64_t minu64(uint64_t a, uint64_t b) { return a < b ? a : b; }
 
 void codes_store_register()
 {
-    lp_type_register(CODES_STORE_LP_NAME, &triton_rosd_lp);
+    lp_type_register(CODES_STORE_LP_NAME, &cs_lp);
 }
 
 void codes_store_configure(int model_net_id){
     uint32_t h1=0, h2=0;
 
     bj_hashlittle2(CODES_STORE_LP_NAME, strlen(CODES_STORE_LP_NAME), &h1, &h2);
-    rosd_magic = h1+h2;
+    cs_magic = h1+h2;
 
     mn_id = model_net_id;
 
@@ -199,8 +195,8 @@ void codes_store_configure(int model_net_id){
 
 ///// BEGIN LP, EVENT PROCESSING FUNCTION DEFS /////
 
-// just putting these here for now, will move later...
-void codes_store_send_resp(
+// helpers to send response to client
+static void codes_store_send_resp(
         int rc,
         struct codes_cb_params const * p,
         tw_lp *lp)
@@ -223,17 +219,17 @@ void codes_store_send_resp(
     int prio = 0;
     model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
             (void*) &prio);
-    model_net_event(mn_id, "rosd", cli_lp, ROSD_REQ_CONTROL_SZ, 0.0,
+    model_net_event(mn_id, CODES_STORE_LP_NAME, cli_lp, CS_REQ_CONTROL_SZ, 0.0,
             p->info.event_size, data, 0, NULL, lp);
 }
 
-void codes_store_send_resp_rc(tw_lp *lp)
+static void codes_store_send_resp_rc(tw_lp *lp)
 {
-    model_net_event_rc(mn_id, lp, ROSD_REQ_CONTROL_SZ);
+    model_net_event_rc(mn_id, lp, CS_REQ_CONTROL_SZ);
 }
 
 
-void triton_rosd_init(triton_rosd_state *ns, tw_lp *lp) {
+void cs_init(cs_state *ns, tw_lp *lp) {
     ns->server_index = codes_mapping_get_lp_relative_id(lp->gid, 0, 0);
 
     INIT_QLIST_HEAD(&ns->pending_ops);
@@ -242,12 +238,12 @@ void triton_rosd_init(triton_rosd_state *ns, tw_lp *lp) {
     ns->op_idx_pl = 0;
 }
 
-void triton_rosd_event_handler(
-        triton_rosd_state * ns,
+void cs_event_handler(
+        cs_state * ns,
         tw_bf * b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp) {
-    assert(m->h.magic == rosd_magic);
+    assert(m->h.magic == cs_magic);
 
     /* check error_ct: only process events when not in "suspend" mode 
      * - NOTE: this impl counts all forward events since the error 
@@ -278,16 +274,16 @@ void triton_rosd_event_handler(
             handle_complete_chunk_send(ns, b, m, lp);
             break;
         default:
-            tw_error(TW_LOC, "unknown rosd event type");
+            tw_error(TW_LOC, "unknown cs event type");
     }
 }
 
-void triton_rosd_event_handler_rc(
-        triton_rosd_state * ns,
+void cs_event_handler_rc(
+        cs_state * ns,
         tw_bf * b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp) {
-    assert(m->h.magic == rosd_magic);
+    assert(m->h.magic == cs_magic);
     
     /* check error_ct: only process events when not in "suspend" mode 
      * - NOTE: this impl counts all forward events since the error 
@@ -318,17 +314,17 @@ void triton_rosd_event_handler_rc(
             handle_complete_chunk_send_rc(ns, b, m, lp);
             break;
         default:
-            tw_error(TW_LOC, "unknown rosd event type");
+            tw_error(TW_LOC, "unknown cs event type");
     }
 }
 
-void triton_rosd_finalize(triton_rosd_state *ns, tw_lp *lp) {
+void cs_finalize(cs_state *ns, tw_lp *lp) {
     rc_stack_destroy(ns->finished_ops);
 
     // check for pending operations that did not complete or were not removed
     struct qlist_head *ent;
     qlist_for_each(ent, &ns->pending_ops){
-        rosd_qitem *qi = qlist_entry(ent, rosd_qitem, ql);
+        cs_qitem *qi = qlist_entry(ent, cs_qitem, ql);
         fprintf(stderr, "WARNING: LP %lu with incomplete qitem "
                 "(cli lp %lu, op id %d)\n",
                 lp->gid, qi->cli_cb.h.src, qi->op_id);
@@ -337,24 +333,24 @@ void triton_rosd_finalize(triton_rosd_state *ns, tw_lp *lp) {
     if (ns->server_index == 0){
         written = sprintf(ns->output_buf, 
                 "# Format: <server id> <LP id> bytes <read> <written>"
-#if ROSD_PRINT_RNG == 1
+#if CS_PRINT_RNG == 1
                 " <rng model> <rng codes>"
 #endif
                 "\n");
     }
     written += sprintf(ns->output_buf+written,
             "%d %lu %lu %lu"
-#if ROSD_PRINT_RNG == 1
+#if CS_PRINT_RNG == 1
             " %lu %lu"
 #endif
             "\n",
             ns->server_index, lp->gid,
             ns->bytes_read_local, ns->bytes_written_local
-#if ROSD_PRINT_RNG == 1
+#if CS_PRINT_RNG == 1
             , lp->rng[0].count, lp->rng[1].count
 #endif
             );
-    lp_io_write(lp->gid, "rosd-stats", written, ns->output_buf);
+    lp_io_write(lp->gid, "cs-stats", written, ns->output_buf);
 }
 
 // NOTE: assumes that there is an allocation to be performed
@@ -362,7 +358,7 @@ static void pipeline_alloc_event(
         tw_bf *b,
         tw_lp *lp,
         int op_id,
-        rosd_pipelined_req *req){
+        cs_pipelined_req *req){
 
     assert(req->rem > 0);
     assert(req->nthreads_init < req->nthreads);
@@ -379,30 +375,30 @@ static void pipeline_alloc_event(
     req->nthreads_init++;
 
 
-    rosd_callback_id id;
+    cs_callback_id id;
     id.op_id = op_id;
     id.tid = tid;
 
     msg_header h;
-    msg_set_header(rosd_magic, PIPELINE_ALLOC_CALLBACK, lp->gid, &h);
+    msg_set_header(cs_magic, PIPELINE_ALLOC_CALLBACK, lp->gid, &h);
 
     // note - this is a "blocking" call - we won't get the callback until 
     // allocation succeeded
-    resource_lp_get(&h, sz, 1, sizeof(triton_rosd_msg),
-            offsetof(triton_rosd_msg, h), 
-            offsetof(triton_rosd_msg, u.palloc_callback.cb),
-            sizeof(rosd_callback_id), 
-            offsetof(triton_rosd_msg, u.palloc_callback.id), &id, lp);
+    resource_lp_get(&h, sz, 1, sizeof(cs_msg),
+            offsetof(cs_msg, h), 
+            offsetof(cs_msg, u.palloc_callback.cb),
+            sizeof(cs_callback_id), 
+            offsetof(cs_msg, u.palloc_callback.id), &id, lp);
 }
 
 void handle_recv_io_req(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp){
 
     // initialize a pipelining operation
-    rosd_qitem *qi = malloc(sizeof(rosd_qitem)); 
+    cs_qitem *qi = malloc(sizeof(cs_qitem)); 
     qi->op_id = ns->op_idx_pl++;
     qi->req = m->u.creq.req;
     qi->cli_cb = m->u.creq.callback;
@@ -419,25 +415,25 @@ void handle_recv_io_req(
     if (m->u.creq.req.type == CSREQ_OPEN
             || m->u.creq.req.type == CSREQ_CREATE) {
         tw_event *e_local;
-        triton_rosd_msg *m_local;
-        rosd_callback_id cb_id;
+        cs_msg *m_local;
+        cs_callback_id cb_id;
         int is_create = m->u.creq.req.type == CSREQ_CREATE;
 
         cb_id.op_id = qi->op_id;
         cb_id.tid = -1;
 
         /* in both cases, send the local disk op */
-        e_local = lsm_event_new("rosd", lp->gid, qi->req.oid, 0, 0,
+        e_local = lsm_event_new(CODES_STORE_LP_NAME, lp->gid, qi->req.oid, 0, 0,
                 is_create ? LSM_WRITE_REQUEST : LSM_READ_REQUEST,
                 sizeof(*m_local), lp, 0.0);
         m_local = lsm_event_data(e_local);
-        msg_set_header(rosd_magic, COMPLETE_DISK_OP, lp->gid, &m_local->h);
+        msg_set_header(cs_magic, COMPLETE_DISK_OP, lp->gid, &m_local->h);
         m_local->u.complete_sto.id = cb_id;
         m_local->u.complete_sto.is_data_op = 0;
         tw_event_send(e_local);
     }
     else {
-        qi->preq = rosd_pipeline_init(num_threads, pipeline_unit_size,
+        qi->preq = cs_pipeline_init(num_threads, pipeline_unit_size,
                 qi->req.xfer_size);
 
         // send the initial allocation event 
@@ -452,9 +448,9 @@ void handle_recv_io_req(
 // c3 - assuming !c0, thread is the last active, so pipeline request was deleted
 //      (and moved to the finished queue)
 void handle_pipeline_alloc_callback(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp){
 
     // getting a failed allocation at this point is a fatal error since we are
@@ -463,9 +459,9 @@ void handle_pipeline_alloc_callback(
 
     // find the corresponding operation
     struct qlist_head *ent = NULL;
-    rosd_qitem *qi = NULL; 
+    cs_qitem *qi = NULL; 
     qlist_for_each(ent, &ns->pending_ops){
-        qi = qlist_entry(ent, rosd_qitem, ql);
+        qi = qlist_entry(ent, cs_qitem, ql);
         if (qi->op_id == m->u.palloc_callback.id.op_id){
             break;
         }
@@ -481,7 +477,7 @@ void handle_pipeline_alloc_callback(
 
     int tid = m->u.palloc_callback.id.tid;
 
-    rosd_pipelined_req *p = qi->preq;
+    cs_pipelined_req *p = qi->preq;
 
     // assign chunk id (giving us an offset for lsm) and chunk size
     // first, check if thread has already been allocated
@@ -511,18 +507,18 @@ void handle_pipeline_alloc_callback(
 
         if (qi->req.type == CSREQ_WRITE) {
             // create network ack callback
-            triton_rosd_msg m_recv;
+            cs_msg m_recv;
             // note: in the header, we actually want the src LP to be the
             // client LP rather than our own
-            msg_set_header(rosd_magic, RECV_CHUNK, qi->cli_cb.h.src, &m_recv.h);
+            msg_set_header(cs_magic, RECV_CHUNK, qi->cli_cb.h.src, &m_recv.h);
             m_recv.u.recv_chunk.id.op_id = qi->op_id;
             m_recv.u.recv_chunk.id.tid = tid;
             // issue "pull" of data from client
             int prio = 0;
             model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
                     (void*) &prio);
-            model_net_pull_event(mn_id, "rosd", qi->cli_cb.h.src,
-                    sz, 0.0, sizeof(triton_rosd_msg), &m_recv, lp);
+            model_net_pull_event(mn_id, CODES_STORE_LP_NAME, qi->cli_cb.h.src,
+                    sz, 0.0, sizeof(cs_msg), &m_recv, lp);
         }
         else if (qi->req.type == CSREQ_READ) {
             // direct read
@@ -533,11 +529,11 @@ void handle_pipeline_alloc_callback(
                     p->punit_size * chunk_id + qi->req.xfer_offset,
                     sz,
                     LSM_READ_REQUEST,
-                    sizeof(triton_rosd_msg),
+                    sizeof(cs_msg),
                     lp,
                     0.0);
-            triton_rosd_msg *m_cb = lsm_event_data(e);
-            msg_set_header(rosd_magic, COMPLETE_DISK_OP, lp->gid, &m_cb->h);
+            cs_msg *m_cb = lsm_event_data(e);
+            msg_set_header(cs_magic, COMPLETE_DISK_OP, lp->gid, &m_cb->h);
             m_cb->u.complete_sto.id.op_id = qi->op_id;
             m_cb->u.complete_sto.id.tid = tid;
             m_cb->u.complete_sto.is_data_op = 1;
@@ -614,15 +610,15 @@ void handle_pipeline_alloc_callback(
 }
 
 void handle_recv_chunk(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp){
     // first look up pipeline request
     struct qlist_head *ent = NULL;
-    rosd_qitem *qi = NULL; 
+    cs_qitem *qi = NULL; 
     qlist_for_each(ent, &ns->pending_ops){
-        qi = qlist_entry(ent, rosd_qitem, ql);
+        qi = qlist_entry(ent, cs_qitem, ql);
         if (qi->op_id == m->u.recv_chunk.id.op_id){
             break;
         }
@@ -637,8 +633,8 @@ void handle_recv_chunk(
     }
 
     int tid = m->u.recv_chunk.id.tid;
-    rosd_pipelined_req *p = qi->preq;
-    rosd_pipelined_thread *t = &p->threads[tid];
+    cs_pipelined_req *p = qi->preq;
+    cs_pipelined_thread *t = &p->threads[tid];
     // RC bug - allocation was reversed locally, then we got a response from the
     // client RDMA
     if (t->chunk_id == -1 || t->chunk_size == 0){
@@ -669,11 +665,11 @@ void handle_recv_chunk(
             p->punit_size * t->chunk_id + qi->req.xfer_offset,
             t->chunk_size,
             LSM_WRITE_REQUEST,
-            sizeof(triton_rosd_msg),
+            sizeof(cs_msg),
             lp,
             0.0);
-    triton_rosd_msg *m_store = lsm_event_data(e_store);
-    msg_set_header(rosd_magic, COMPLETE_DISK_OP, lp->gid, &m_store->h);
+    cs_msg *m_store = lsm_event_data(e_store);
+    msg_set_header(cs_magic, COMPLETE_DISK_OP, lp->gid, &m_store->h);
     m_store->u.complete_sto.id.op_id = qi->op_id;
     m_store->u.complete_sto.id.tid = tid;
     m_store->u.complete_sto.is_data_op = 1;
@@ -686,18 +682,18 @@ void handle_recv_chunk(
 // c2 - thread had more work to do
 // c3 - !c2, last running thread -> cleanup performed
 static void handle_complete_disk_op(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp){
-    rosd_callback_id *id;
+    cs_callback_id *id;
     id = &m->u.complete_sto.id;
 
     // find the pipeline op
     struct qlist_head *ent = NULL;
-    rosd_qitem *qi = NULL; 
+    cs_qitem *qi = NULL; 
     qlist_for_each(ent, &ns->pending_ops){
-        qi = qlist_entry(ent, rosd_qitem, ql);
+        qi = qlist_entry(ent, cs_qitem, ql);
         if (qi->op_id == id->op_id){
             break;
         }
@@ -719,8 +715,8 @@ static void handle_complete_disk_op(
         b->c1 = 1;
     }
     else {
-        rosd_pipelined_req *p = qi->preq;
-        rosd_pipelined_thread *t = &p->threads[id->tid];
+        cs_pipelined_req *p = qi->preq;
+        cs_pipelined_thread *t = &p->threads[id->tid];
 
         lprintf("%lu: committed:%lu+%lu\n", lp->gid, p->committed,
                 t->chunk_size);
@@ -735,11 +731,11 @@ static void handle_complete_disk_op(
         if (qi->req.type == CSREQ_READ){
             /* send to client without a remote message and with a local "chunk
              * done" message */
-            triton_rosd_msg m_loc;
-            msg_set_header(rosd_magic, COMPLETE_CHUNK_SEND, lp->gid, &m_loc.h);
+            cs_msg m_loc;
+            msg_set_header(cs_magic, COMPLETE_CHUNK_SEND, lp->gid, &m_loc.h);
             m_loc.u.complete_chunk_send.id = *id;
-            model_net_event(mn_id, "rosd", cli_lp, t->chunk_size, 0.0,
-                    0, NULL, sizeof(m_loc), &m_loc, lp);
+            model_net_event(mn_id, CODES_STORE_LP_NAME, cli_lp, t->chunk_size,
+                    0.0, 0, NULL, sizeof(m_loc), &m_loc, lp);
         }
         else {
             // two cases to consider:
@@ -799,15 +795,15 @@ static void handle_complete_disk_op(
                 p->rem -= chunk_sz;
 
                 // setup, send message
-                triton_rosd_msg m_recv;
-                msg_set_header(rosd_magic, RECV_CHUNK, cli_lp, &m_recv.h);
+                cs_msg m_recv;
+                msg_set_header(cs_magic, RECV_CHUNK, cli_lp, &m_recv.h);
                 m_recv.u.recv_chunk.id = *id;
                 // control message gets high priority
                 int prio = 0;
                 model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
                         (void*) &prio);
-                model_net_pull_event(mn_id, "rosd", cli_lp, chunk_sz,
-                        0.0, sizeof(triton_rosd_msg), &m_recv, lp);
+                model_net_pull_event(mn_id, CODES_STORE_LP_NAME, cli_lp,
+                        chunk_sz, 0.0, sizeof(cs_msg), &m_recv, lp);
                 lprintf("%lu: pull req to %lu\n", lp->gid, cli_lp);
             }
         }
@@ -819,16 +815,16 @@ static void handle_complete_disk_op(
 // c1 - last running thread -> cleanup performed
 // c2 - all data on the wire -> ack to client
 void handle_complete_chunk_send(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp) {
     // find the pipeline op
     struct qlist_head *ent = NULL;
-    rosd_qitem *qi = NULL;
-    rosd_callback_id id = m->u.complete_chunk_send.id;
+    cs_qitem *qi = NULL;
+    cs_callback_id id = m->u.complete_chunk_send.id;
     qlist_for_each(ent, &ns->pending_ops){
-        qi = qlist_entry(ent, rosd_qitem, ql);
+        qi = qlist_entry(ent, cs_qitem, ql);
         if (qi->op_id == id.op_id){
             break;
         }
@@ -843,8 +839,8 @@ void handle_complete_chunk_send(
         return;
     }
 
-    rosd_pipelined_req *p = qi->preq;
-    rosd_pipelined_thread *t = &p->threads[id.tid];
+    cs_pipelined_req *p = qi->preq;
+    cs_pipelined_thread *t = &p->threads[id.tid];
     // in either case, set chunk info for rc
     m->u.complete_chunk_send.rc.chunk_id = t->chunk_id;
     m->u.complete_chunk_send.rc.chunk_size = t->chunk_size;
@@ -905,12 +901,12 @@ void handle_complete_chunk_send(
                 p->punit_size * t->chunk_id + qi->req.xfer_offset,
                 chunk_sz,
                 LSM_READ_REQUEST,
-                sizeof(triton_rosd_msg),
+                sizeof(cs_msg),
                 lp,
                 0.0);
 
-        triton_rosd_msg *m_cb = lsm_event_data(e);
-        msg_set_header(rosd_magic, COMPLETE_DISK_OP, lp->gid, &m_cb->h);
+        cs_msg *m_cb = lsm_event_data(e);
+        msg_set_header(cs_magic, COMPLETE_DISK_OP, lp->gid, &m_cb->h);
         m_cb->u.complete_sto.id = id;
         m_cb->u.complete_sto.is_data_op = 1;
         tw_event_send(e);
@@ -921,16 +917,16 @@ static void pipeline_alloc_event_rc(
         tw_bf *b, 
         tw_lp *lp, 
         int op_id,
-        rosd_pipelined_req *req){
+        cs_pipelined_req *req){
     req->nthreads_alloc_waiting--;
     req->nthreads_init--;
     resource_lp_get_rc(lp);
 }
 
 void handle_recv_io_req_rc(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp){
 
     int op_id_prev = m->u.creq.rc.op_id;
@@ -938,9 +934,9 @@ void handle_recv_io_req_rc(
     // find the queue item (removal from list can be from any location, rc
     // pushes it back to the back, so we have to iterate)
     struct qlist_head *qitem_ent;
-    rosd_qitem *qi = NULL;
+    cs_qitem *qi = NULL;
     qlist_for_each(qitem_ent, &ns->pending_ops){
-        qi = qlist_entry(qitem_ent, rosd_qitem, ql);
+        qi = qlist_entry(qitem_ent, cs_qitem, ql);
         if (qi->op_id == op_id_prev){
             break;
         }
@@ -957,7 +953,7 @@ void handle_recv_io_req_rc(
     else {
         // before doing cleanups (free(...)), reverse the alloc event
         pipeline_alloc_event_rc(b, lp, op_id_prev, qi->preq);
-        rosd_pipeline_destroy(qi->preq);
+        cs_pipeline_destroy(qi->preq);
     }
 
     qlist_del(qitem_ent);
@@ -971,12 +967,12 @@ void handle_recv_io_req_rc(
 // c3 - assuming !c0, thread is the last active, so pipeline request was deleted
 //      (and moved to the finished queue)
 void handle_pipeline_alloc_callback_rc(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp){
     // find the request 
-    rosd_qitem *qi = NULL;
+    cs_qitem *qi = NULL;
     if (b->c3){
         qi = rc_stack_pop(ns->finished_ops);
         // add back into the queue
@@ -993,7 +989,7 @@ void handle_pipeline_alloc_callback_rc(
     else{
         struct qlist_head *ent = NULL;
         qlist_for_each(ent, &ns->pending_ops){
-            qi = qlist_entry(ent, rosd_qitem, ql);
+            qi = qlist_entry(ent, cs_qitem, ql);
             if (qi->op_id == m->u.palloc_callback.id.op_id){
                 break;
             }
@@ -1003,7 +999,7 @@ void handle_pipeline_alloc_callback_rc(
     
     int tid = m->u.palloc_callback.id.tid;
 
-    rosd_pipelined_req *p = qi->preq;
+    cs_pipelined_req *p = qi->preq;
     if (b->c0){
         p->thread_chunk_id_curr--;
         // the size computed is stored in the thread's chunk_size
@@ -1047,15 +1043,15 @@ void handle_pipeline_alloc_callback_rc(
     p->nthreads_alloc_waiting++;
 }
 void handle_recv_chunk_rc(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp){
     // first look up pipeline request
     struct qlist_head *ent = NULL;
-    rosd_qitem *qi = NULL; 
+    cs_qitem *qi = NULL; 
     qlist_for_each(ent, &ns->pending_ops){
-        qi = qlist_entry(ent, rosd_qitem, ql);
+        qi = qlist_entry(ent, cs_qitem, ql);
         if (qi->op_id == m->u.recv_chunk.id.op_id){
             break;
         }
@@ -1065,22 +1061,22 @@ void handle_recv_chunk_rc(
     lsm_event_new_reverse(lp);
 
     int tid = m->u.recv_chunk.id.tid;
-    rosd_pipelined_thread *t = &qi->preq->threads[tid];
+    cs_pipelined_thread *t = &qi->preq->threads[tid];
     qi->preq->received -= t->chunk_size;
 }
 
 static void handle_complete_disk_op_rc(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp){
-    rosd_callback_id *id;
+    cs_callback_id *id;
     int prev_chunk_id;
     uint64_t prev_chunk_size;
     id = &m->u.complete_sto.id;
 
     // get the operation
-    rosd_qitem *qi = NULL;
+    cs_qitem *qi = NULL;
     if (b->c1 || b->c3){
         // request was "deleted", put back into play
         qi = rc_stack_pop(ns->finished_ops);
@@ -1094,7 +1090,7 @@ static void handle_complete_disk_op_rc(
     else{
         struct qlist_head *ent = NULL;
         qlist_for_each(ent, &ns->pending_ops){
-            qi = qlist_entry(ent, rosd_qitem, ql);
+            qi = qlist_entry(ent, cs_qitem, ql);
             if (qi->op_id == id->op_id){
                 break;
             }
@@ -1106,8 +1102,8 @@ static void handle_complete_disk_op_rc(
         codes_store_send_resp_rc(lp);
     }
     else {
-        rosd_pipelined_req *p = qi->preq;
-        rosd_pipelined_thread *t = &p->threads[id->tid];
+        cs_pipelined_req *p = qi->preq;
+        cs_pipelined_thread *t = &p->threads[id->tid];
 
         // set the chunk rc parameters
         if (!b->c2){ //chunk size wasn't overwritten, grab it from the thread
@@ -1167,14 +1163,14 @@ static void handle_complete_disk_op_rc(
 }
 
 void handle_complete_chunk_send_rc(
-        triton_rosd_state * ns,
+        cs_state * ns,
         tw_bf *b,
-        triton_rosd_msg * m,
+        cs_msg * m,
         tw_lp * lp) {
-    rosd_callback_id id = m->u.complete_chunk_send.id;
+    cs_callback_id id = m->u.complete_chunk_send.id;
 
     // get the operation
-    rosd_qitem *qi = NULL;
+    cs_qitem *qi = NULL;
 
     if (b->c1) {
         // request was "deleted", put back into play
@@ -1187,7 +1183,7 @@ void handle_complete_chunk_send_rc(
     else{
         struct qlist_head *ent = NULL;
         qlist_for_each(ent, &ns->pending_ops){
-            qi = qlist_entry(ent, rosd_qitem, ql);
+            qi = qlist_entry(ent, cs_qitem, ql);
             if (qi->op_id == id.op_id){
                 break;
             }
@@ -1195,8 +1191,8 @@ void handle_complete_chunk_send_rc(
         assert(ent != &ns->pending_ops);
     }
 
-    rosd_pipelined_req *p = qi->preq;
-    rosd_pipelined_thread *t = &p->threads[id.tid];
+    cs_pipelined_req *p = qi->preq;
+    cs_pipelined_thread *t = &p->threads[id.tid];
 
     if (b->c0) {
         p->nthreads_fin--;

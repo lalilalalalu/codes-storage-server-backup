@@ -9,11 +9,11 @@
 
 #include "codes/lp-msg.h"
 
-typedef struct rosd_pipelined_req rosd_pipelined_req;
-typedef struct rosd_pipelined_thread rosd_pipelined_thread;
+typedef struct cs_pipelined_req cs_pipelined_req;
+typedef struct cs_pipelined_thread cs_pipelined_thread;
 
 // threaded pipelining of request buffers
-struct rosd_pipelined_req {
+struct cs_pipelined_req {
     // remaining bytes of request, decremented when thread inits client rdma 
     // so we can properly determine some boundary conditions
     uint64_t rem;
@@ -33,10 +33,10 @@ struct rosd_pipelined_req {
     // max buffer size per thread
     uint64_t punit_size;
     // thread-specific info
-    rosd_pipelined_thread *threads;
+    cs_pipelined_thread *threads;
 };
 
-struct rosd_pipelined_thread {
+struct cs_pipelined_thread {
     // which chunk the thread is currently processing (-1 -> unset)
     int chunk_id;
     // chunk and pipeline size
@@ -46,14 +46,14 @@ struct rosd_pipelined_thread {
     uint64_t punit_size;
 };
 
-rosd_pipelined_req* rosd_pipeline_init(
+cs_pipelined_req* cs_pipeline_init(
         int nthreads, 
         uint64_t punit_size_max,
         uint64_t req_size);
 
-void rosd_pipeline_destroy(rosd_pipelined_req *req);
+void cs_pipeline_destroy(cs_pipelined_req *req);
 
-#endif /* end of include guard: ROSD_CREQ_H */
+#endif
 
 /*
  * Local variables:

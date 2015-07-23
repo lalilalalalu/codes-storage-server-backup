@@ -8,17 +8,17 @@
 #include <stdlib.h>
 #include <assert.h>
 
-rosd_pipelined_req* rosd_pipeline_init(
+cs_pipelined_req* cs_pipeline_init(
         int nthreads,
         uint64_t punit_size_max,
         uint64_t req_size)
 {
-    rosd_pipelined_req *r;
+    cs_pipelined_req *r;
     if (nthreads <= 0){
         return NULL;
     }
 
-    r = malloc(sizeof(rosd_pipelined_req));
+    r = malloc(sizeof(cs_pipelined_req));
     assert(r != NULL);
 
     r->nthreads = nthreads;
@@ -36,7 +36,7 @@ rosd_pipelined_req* rosd_pipeline_init(
     r->committed = 0;
     r->forwarded = 0;
 
-    r->threads = calloc(nthreads, sizeof(rosd_pipelined_thread));
+    r->threads = calloc(nthreads, sizeof(cs_pipelined_thread));
     assert(r->threads != NULL);
 
     // 0-initialize is OK for all except the chunk ids, which need to be -1
@@ -47,7 +47,7 @@ rosd_pipelined_req* rosd_pipeline_init(
     return r;
 }
 
-void rosd_pipeline_destroy(rosd_pipelined_req *req){
+void cs_pipeline_destroy(cs_pipelined_req *req){
     free(req->threads);
     free(req);
 }

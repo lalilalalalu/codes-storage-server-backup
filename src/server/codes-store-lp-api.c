@@ -44,8 +44,8 @@ void codes_store_send_req(
     /* get the LP */
     tw_lpid store_lpid = codes_store_get_store_lpid(dest_id, NULL, 0);
 
-    triton_rosd_msg m;
-    msg_set_header(rosd_magic, RECV_CLI_REQ, sender->gid, &m.h);
+    cs_msg m;
+    msg_set_header(cs_magic, RECV_CLI_REQ, sender->gid, &m.h);
 
     m.u.creq.req = *r;
     m.u.creq.callback.info = *cb;
@@ -55,14 +55,14 @@ void codes_store_send_req(
     int prio = 0;
     model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
             (void*) &prio);
-    model_net_event(model_net_id, "rosd", store_lpid,
-            ROSD_REQ_CONTROL_SZ, 0.0, sizeof(triton_rosd_msg), &m, 0,
+    model_net_event(model_net_id, CODES_STORE_LP_NAME, store_lpid,
+            CS_REQ_CONTROL_SZ, 0.0, sizeof(cs_msg), &m, 0,
             NULL, sender);
 }
 
 void codes_store_send_req_rc(int model_net_id, tw_lp * sender)
 {
-    model_net_event_rc(model_net_id, sender, ROSD_REQ_CONTROL_SZ);
+    model_net_event_rc(model_net_id, sender, CS_REQ_CONTROL_SZ);
 }
 
 tw_lpid codes_store_get_store_lpid(

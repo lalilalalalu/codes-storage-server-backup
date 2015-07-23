@@ -16,22 +16,14 @@
 #include "codes/resource-lp.h"
 #include "codes-store-pipeline.h"
 
-#define ROSD_REQ_CONTROL_SZ 128
+#define CS_REQ_CONTROL_SZ 128
 
-/* DEBUG flags:
- * 1 - LP and msg states printed to per-lp logs
- * 2 - 1, as well as event specific logs to stdout */
-#define ROSD_DEBUG 0
-
-extern int rosd_magic; // needed by msg-v2.c
+extern int cs_magic; // needed by msg-v2.c
 extern int replication_factor; // needed by client (for computing placement)
-extern int do_rosd_lp_io; // needed by configuration in main (TODO: fix)
-extern lp_io_handle rosd_io_handle; // needed by config in main (TODO: fix)
 
-typedef struct triton_rosd_msg triton_rosd_msg;
-typedef struct triton_rosd_state triton_rosd_state;
+typedef struct cs_msg cs_msg;
 
-enum triton_rosd_event_type {
+enum cs_event_type {
     // receive an initial request from a client 
     // - primary-server only
     RECV_CLI_REQ = 20,
@@ -52,14 +44,13 @@ enum triton_rosd_event_type {
     COMPLETE_CHUNK_SEND
 };
 
-typedef struct rosd_qitem rosd_qitem;
 // a wrapper for a pipelined op id and a thread id
-typedef struct rosd_callback_id {
+typedef struct cs_callback_id {
     int op_id; // pipelined op id
     int tid;   // thread id for particular event
-} rosd_callback_id;
+} cs_callback_id;
 
-struct triton_rosd_msg {
+struct cs_msg {
     msg_header h;
 
     union {
@@ -72,7 +63,7 @@ struct triton_rosd_msg {
         } creq; // RECV_CLI_REQ
         struct {
             resource_callback cb;
-            rosd_callback_id id;
+            cs_callback_id id;
             struct {
                 // see handle_pipeline_alloc_callback for usage
                 int nthreads_init;
@@ -80,10 +71,10 @@ struct triton_rosd_msg {
             } rc;
         } palloc_callback; // PIPELINE_ALLOC_CALLBACK
         struct {
-            rosd_callback_id id;
+            cs_callback_id id;
         } recv_chunk; // RECV_CHUNK
         struct {
-            rosd_callback_id id;
+            cs_callback_id id;
             // data vs. metadata req - controls which queue will be searched
             int is_data_op;
             struct {
@@ -92,7 +83,7 @@ struct triton_rosd_msg {
             } rc;
         } complete_sto; // COMPLETE_DISK_OP
         struct {
-            rosd_callback_id id;
+            cs_callback_id id;
             struct {
                 int chunk_id;
                 uint64_t chunk_size;
@@ -103,26 +94,15 @@ struct triton_rosd_msg {
 
 /// helper structures for overall message struct
 
-struct rosd_qitem {
+struct cs_qitem {
     // my op id
     int op_id;
     struct codes_store_request req;
     struct codes_cb_params cli_cb;
-    rosd_pipelined_req *preq;
+    cs_pipelined_req *preq;
     struct qlist_head ql;
 };
-
-// registers the lp type with ross
-void rosd_register();
-// configures the lp given the global config object
-void rosd_configure(int model_net_id);
-
-// just putting these here for now, will move later...
-void codes_store_send_resp(
-        int rc,
-        struct codes_cb_params const * p,
-        tw_lp *lp);
-void codes_store_send_resp_rc(tw_lp *lp);
+typedef struct cs_qitem cs_qitem;
 
 #endif
 
