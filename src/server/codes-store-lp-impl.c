@@ -56,9 +56,9 @@ struct cs_state {
     int op_idx_pl;
 
     // stats
-    // stats: bytes 
-    // - written locally 
-    // - read locally 
+    // stats: bytes
+    // - written locally
+    // - read locally
     unsigned long bytes_written_local;
     unsigned long bytes_read_local;
 
@@ -223,8 +223,8 @@ void cs_event_handler(
         tw_lp * lp) {
     assert(m->h.magic == cs_magic);
 
-    /* check error_ct: only process events when not in "suspend" mode 
-     * - NOTE: this impl counts all forward events since the error 
+    /* check error_ct: only process events when not in "suspend" mode
+     * - NOTE: this impl counts all forward events since the error
      *   condition was reached, only allowing progress when we are back to
      *   normal */
     if (ns->error_ct > 0){
@@ -254,9 +254,9 @@ void cs_event_handler_rc(
         cs_msg * m,
         tw_lp * lp) {
     assert(m->h.magic == cs_magic);
-    
-    /* check error_ct: only process events when not in "suspend" mode 
-     * - NOTE: this impl counts all forward events since the error 
+
+    /* check error_ct: only process events when not in "suspend" mode
+     * - NOTE: this impl counts all forward events since the error
      *   condition was reached, only allowing progress when we are back to
      *   normal */
     if (ns->error_ct > 0){
@@ -291,7 +291,7 @@ void cs_finalize(cs_state *ns, tw_lp *lp) {
     }
     int written = 0;
     if (ns->server_index == 0){
-        written = sprintf(ns->output_buf, 
+        written = sprintf(ns->output_buf,
                 "# Format: <server id> <LP id> bytes <read> <written>"
 #if CS_PRINT_RNG == 1
                 " <rng model> <rng codes>"
@@ -342,12 +342,12 @@ static void pipeline_alloc_event(
     msg_header h;
     msg_set_header(cs_magic, CS_PIPELINE_ALLOC_CALLBACK, lp->gid, &h);
 
-    // note - this is a "blocking" call - we won't get the callback until 
+    // note - this is a "blocking" call - we won't get the callback until
     // allocation succeeded
     resource_lp_get(&h, sz, 1, sizeof(cs_msg),
-            offsetof(cs_msg, h), 
+            offsetof(cs_msg, h),
             offsetof(cs_msg, u.palloc_callback.cb),
-            sizeof(cs_callback_id), 
+            sizeof(cs_callback_id),
             offsetof(cs_msg, u.palloc_callback.id), &id, lp);
 }
 
@@ -359,7 +359,7 @@ void handle_recv_cli_req(
         tw_lp * lp){
 
     // initialize a pipelining operation
-    cs_qitem *qi = malloc(sizeof(cs_qitem)); 
+    cs_qitem *qi = malloc(sizeof(cs_qitem));
     qi->op_id = ns->op_idx_pl++;
     qi->req = m->req;
     qi->cli_cb = m->callback;
@@ -399,7 +399,7 @@ void handle_recv_cli_req(
         qi->preq = cs_pipeline_init(num_threads, pipeline_unit_size,
                 qi->req.xfer_size);
 
-        // send the initial allocation event 
+        // send the initial allocation event
         pipeline_alloc_event(b, lp, qi->op_id, qi->preq);
     }
 }
@@ -423,7 +423,7 @@ void handle_palloc_callback(
 
     // find the corresponding operation
     struct qlist_head *ent = NULL;
-    cs_qitem *qi = NULL; 
+    cs_qitem *qi = NULL;
     qlist_for_each(ent, &ns->pending_ops){
         qi = qlist_entry(ent, cs_qitem, ql);
         if (qi->op_id == m->id.op_id){
@@ -431,8 +431,8 @@ void handle_palloc_callback(
         }
     }
     if (ent == &ns->pending_ops){
-        int written = sprintf(ns->output_buf, 
-                "ERROR: pipeline op with id %d not found", 
+        int written = sprintf(ns->output_buf,
+                "ERROR: pipeline op with id %d not found",
                 m->id.op_id);
         lp_io_write(lp->gid, "errors", written, ns->output_buf);
         ns->error_ct = 1;
@@ -536,13 +536,13 @@ void handle_palloc_callback(
 
         // NOTE: normally we'd kick off other allocation requests, but in this
         // case we're not. Hence, we need to set the thread counts up here as if
-        // the remaining threads were kicked off and didn't do anything. 
+        // the remaining threads were kicked off and didn't do anything.
         // This is necessary because finalization code works based on thread
         // counts being in certain states.
 
         tprintf("%lu,%d: thread %d alloc'd after compl, "
                 "tid counts (%d+%d, %d-1, %d+%d)\n",
-                lp->gid, qi->op_id, tid, p->nthreads_init, 
+                lp->gid, qi->op_id, tid, p->nthreads_init,
                 p->nthreads - p->nthreads_init,
                 p->nthreads_alloc_waiting+1, p->nthreads_fin,
                 p->nthreads - p->nthreads_init+1);
@@ -583,7 +583,7 @@ void handle_recv_chunk(
         tw_lp * lp){
     // first look up pipeline request
     struct qlist_head *ent = NULL;
-    cs_qitem *qi = NULL; 
+    cs_qitem *qi = NULL;
     qlist_for_each(ent, &ns->pending_ops){
         qi = qlist_entry(ent, cs_qitem, ql);
         if (qi->op_id == m->id.op_id){
@@ -591,8 +591,8 @@ void handle_recv_chunk(
         }
     }
     if (ent == &ns->pending_ops){
-        int written = sprintf(ns->output_buf, 
-                "ERROR: pipeline op with id %d not found (chunk recv)", 
+        int written = sprintf(ns->output_buf,
+                "ERROR: pipeline op with id %d not found (chunk recv)",
                 m->id.op_id);
         lp_io_write(lp->gid, "errors", written, ns->output_buf);
         ns->error_ct = 1;
@@ -626,7 +626,7 @@ void handle_recv_chunk(
             p->punit_size * t->chunk_id + qi->req.xfer_offset,
             t->chunk_size);
     tw_event *e_store = lsm_event_new(
-            CODES_STORE_LP_NAME, 
+            CODES_STORE_LP_NAME,
             lp->gid,
             qi->req.oid,
             p->punit_size * t->chunk_id + qi->req.xfer_offset,
@@ -660,7 +660,7 @@ static void handle_complete_disk_op(
 
     // find the pipeline op
     struct qlist_head *ent = NULL;
-    cs_qitem *qi = NULL; 
+    cs_qitem *qi = NULL;
     qlist_for_each(ent, &ns->pending_ops){
         qi = qlist_entry(ent, cs_qitem, ql);
         if (qi->op_id == id->op_id){
@@ -668,8 +668,8 @@ static void handle_complete_disk_op(
         }
     }
     if (ent == &ns->pending_ops){
-        int written = sprintf(ns->output_buf, 
-                "ERROR: pipeline op with id %d not found on LP %lu (async_completion,%s)", 
+        int written = sprintf(ns->output_buf,
+                "ERROR: pipeline op with id %d not found on LP %lu (async_completion,%s)",
                 id->op_id, lp->gid,
                 h->event_type==CS_COMPLETE_DISK_OP ? "disk" : "fwd");
         lp_io_write(lp->gid, "errors", written, ns->output_buf);
@@ -720,7 +720,7 @@ static void handle_complete_disk_op(
 
             // no more work to do
             if (p->rem == 0){
-                // if we are the primary and no pending chunks, then 
+                // if we are the primary and no pending chunks, then
                 // ack to client (under all_commit)
                 // NOTE: can't simply check if we're last active thread - others
                 // may be waiting on allocation still (single chunk requests)
@@ -749,11 +749,11 @@ static void handle_complete_disk_op(
             else { // more work to do
                 b->c2 = 1;
                 // compute new chunk size
-                uint64_t chunk_sz = p->punit_size > p->rem ? 
+                uint64_t chunk_sz = p->punit_size > p->rem ?
                     p->rem : p->punit_size;
                 tprintf("%lu,%d: thread %d given chunk %d (msg %p)"
                         "tid counts (%d, %d, %d) rem %lu-%lu\n",
-                        lp->gid, qi->op_id, id->tid, 
+                        lp->gid, qi->op_id, id->tid,
                         p->thread_chunk_id_curr, m,
                         p->nthreads_init,
                         p->nthreads_alloc_waiting, p->nthreads_fin,
@@ -887,8 +887,8 @@ void handle_complete_chunk_send(
 }
 
 static void pipeline_alloc_event_rc(
-        tw_bf *b, 
-        tw_lp *lp, 
+        tw_bf *b,
+        tw_lp *lp,
         int op_id,
         cs_pipelined_req *req){
     req->nthreads_alloc_waiting--;
@@ -946,7 +946,7 @@ void handle_palloc_callback_rc(
         msg_header const * h,
         struct ev_palloc_callback * m,
         tw_lp * lp){
-    // find the request 
+    // find the request
     cs_qitem *qi = NULL;
     if (b->c3){
         qi = rc_stack_pop(ns->finished_ops);
@@ -971,7 +971,7 @@ void handle_palloc_callback_rc(
         }
         assert(ent != &ns->pending_ops);
     }
-    
+
     int tid = m->id.tid;
 
     cs_pipelined_req *p = qi->preq;
@@ -1025,7 +1025,7 @@ void handle_recv_chunk_rc(
         tw_lp * lp){
     // first look up pipeline request
     struct qlist_head *ent = NULL;
-    cs_qitem *qi = NULL; 
+    cs_qitem *qi = NULL;
     qlist_for_each(ent, &ns->pending_ops){
         qi = qlist_entry(ent, cs_qitem, ql);
         if (qi->op_id == m->id.op_id){
@@ -1112,7 +1112,7 @@ static void handle_complete_disk_op_rc(
                         lp->gid, qi->op_id, id->tid, t->chunk_id,
                         m,
                         p->nthreads_init,
-                        p->nthreads_alloc_waiting, 
+                        p->nthreads_alloc_waiting,
                         p->nthreads_fin,
                         p->rem, t->chunk_size);
                 lprintf("%lu: async-compl rc rem:%lu+%lu\n", lp->gid,
