@@ -17,6 +17,10 @@
 
 #define CLIENT_LP_NM "test-client"
 
+#define CLIENT_DBG 0
+#define dprintf(_fmt, ...) \
+    do {if (CLIENT_DBG) printf(_fmt, __VA_ARGS__);} while (0)
+
 static int num_reqs;
 static int req_size;
 static int test_client_magic;
@@ -59,7 +63,7 @@ static void next(
 
     codes_store_send_req(&r, 0, lp, cli_mn_id, 0, &h, &ns->cb);
 
-    printf("%lu: sent %s request\n", lp->gid, is_write ? "write" : "read");
+    dprintf("%lu: sent %s request\n", lp->gid, is_write ? "write" : "read");
 }
 static void next_rc(
         int is_write,
@@ -68,7 +72,7 @@ static void next_rc(
         tw_lp *lp)
 {
     codes_store_send_req_rc(cli_mn_id, lp);
-    printf("%lu: sent %s request (rc)\n", lp->gid, is_write ? "write" : "read");
+    dprintf("%lu: sent %s request (rc)\n", lp->gid, is_write ? "write" : "read");
 }
 
 
@@ -82,7 +86,7 @@ static void test_client_event(
 
     switch(m->h.event_type) {
         case TEST_CLI_ACK:
-            printf("%lu: received ack\n", lp->gid);
+            dprintf("%lu: received ack\n", lp->gid);
             if (ns->num_complete_wr == num_reqs) {
                 b->c0 = 1;
                 ns->num_complete_rd++;
@@ -109,7 +113,7 @@ static void test_client_event_rc(
 
     switch(m->h.event_type) {
         case TEST_CLI_ACK:
-            printf("%lu: received ack (rc)\n", lp->gid);
+            dprintf("%lu: received ack (rc)\n", lp->gid);
             assert(m->ret == CODES_STORE_OK);
             if (b->c0) {
                 next_rc(0, ns, m, lp);
