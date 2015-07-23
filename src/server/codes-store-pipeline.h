@@ -4,8 +4,8 @@
  *
  */
 
-#ifndef ROSD_CREQ_H
-#define ROSD_CREQ_H
+#ifndef CODES_STORE_PIPELINE_H
+#define CODES_STORE_PIPELINE_H
 
 #include "codes/lp-msg.h"
 

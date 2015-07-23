@@ -17,8 +17,8 @@
 #include <codes/rc-stack.h>
 #include <codes/codes-callback.h>
 
-#include "rosd.h"
-#include "rosd-creq.h"
+#include "codes-store-lp-internal.h"
+#include "codes-store-pipeline.h"
 
 /// danger: debug messages will produce a LOT of output, even for small runs
 /// and especially in optimistic runs
@@ -49,10 +49,6 @@ static int mn_id;
 /* system parameters */
 static int num_threads = 4;
 static int pipeline_unit_size = (1<<22);
-
-/* disable lp output unless told otherwise */
-int do_rosd_lp_io = 0;
-lp_io_handle rosd_io_handle;
 
 /* for rc-stack: free fn for pipeline_qitem */
 static void free_qitem(void * ptr)
@@ -174,12 +170,12 @@ tw_lptype triton_rosd_lp = {
 
 static uint64_t minu64(uint64_t a, uint64_t b) { return a < b ? a : b; }
 
-void rosd_register()
+void codes_store_register()
 {
     lp_type_register(CODES_STORE_LP_NAME, &triton_rosd_lp);
 }
 
-void rosd_configure(int model_net_id){
+void codes_store_configure(int model_net_id){
     uint32_t h1=0, h2=0;
 
     bj_hashlittle2(CODES_STORE_LP_NAME, strlen(CODES_STORE_LP_NAME), &h1, &h2);

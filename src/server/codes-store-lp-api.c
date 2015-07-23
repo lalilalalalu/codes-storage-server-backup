@@ -13,7 +13,7 @@
 
 #include <codes/codes-store-lp.h>
 
-#include "rosd.h"
+#include "codes-store-lp-internal.h"
 
 char const * const CODES_STORE_LP_NAME = "codes-store";
 

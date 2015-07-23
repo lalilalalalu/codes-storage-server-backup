@@ -9,9 +9,11 @@
 #include <codes/local-storage-model.h>
 #include <codes/model-net.h>
 #include <codes/codes_mapping.h>
+#include <codes/lp-io.h>
+#include <codes/resource-lp.h>
 
-#include "../src/server/rosd.h"
-#include "rosd-test-client.h"
+#include <codes/codes-store-lp.h>
+#include "test-client.h"
 
 static tw_stime s_to_ns(tw_stime s)
 {
@@ -21,9 +23,11 @@ static tw_stime s_to_ns(tw_stime s)
 static char conf_file_name[256] = {'\0'};
 static char lp_io_dir[256] = {'\0'};
 static unsigned int lp_io_use_suffix = 0;
+static int do_lp_io = 0;
+static lp_io_handle io_handle;
 
 const tw_optdef app_opt[] = {
-    TWOPT_GROUP("ROSD mock test model"),
+    TWOPT_GROUP("codes-store mock test model"),
     TWOPT_CHAR("codes-config", conf_file_name, "Name of codes configuration file"),
     TWOPT_CHAR("lp-io-dir", lp_io_dir, "Where to place io output (unspecified -> no output"),
     TWOPT_UINT("lp-io-use-suffix", lp_io_use_suffix, "Whether to append uniq suffix to lp-io directory (default 0)"),
@@ -57,7 +61,7 @@ int main(int argc, char * argv[])
 
     // register lps
     lsm_register();
-    rosd_register();
+    codes_store_register();
     resource_lp_init();
     test_client_register();
 
@@ -79,24 +83,24 @@ int main(int argc, char * argv[])
     /* after the mapping configuration is loaded, let LPs parse the
      * configuration information. This is done so that LPs have access to
      * the codes_mapping interface for getting LP counts and such */
-    rosd_configure(model_net_id);
+    codes_store_configure(model_net_id);
     resource_lp_configure();
     lsm_configure();
     test_client_configure(model_net_id);
 
 
     if (lp_io_dir[0]){
-        do_rosd_lp_io = 1;
+        do_lp_io = 1;
         /* initialize lp io */
         int flags = lp_io_use_suffix ? LP_IO_UNIQ_SUFFIX : 0;
-        int ret = lp_io_prepare(lp_io_dir, flags, &rosd_io_handle, MPI_COMM_WORLD);
+        int ret = lp_io_prepare(lp_io_dir, flags, &io_handle, MPI_COMM_WORLD);
         assert(ret == 0 || !"lp_io_prepare failure");
     }
 
     tw_run();
 
-    if (do_rosd_lp_io){
-        int ret = lp_io_flush(rosd_io_handle, MPI_COMM_WORLD);
+    if (do_lp_io){
+        int ret = lp_io_flush(io_handle, MPI_COMM_WORLD);
         assert(ret == 0 || !"lp_io_flush failure");
     }
 

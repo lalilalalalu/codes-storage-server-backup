@@ -5,18 +5,18 @@ if [ -z $srcdir ]; then
     exit 1
 fi
 
-out_dir=rosd-test-simple-output
+out_dir=test-simple-output
 
 rm -rf "$out_dir-ser" "$out_dir-ser-big" "$out_dir-opt-big"
 
-./tests/rosd-test-simple --codes-config="${srcdir}"/tests/conf/rosd-test-simple.conf --lp-io-dir="$out_dir"-ser
+./tests/test-simple --codes-config="${srcdir}"/tests/conf/test-simple.conf --lp-io-dir="$out_dir"-ser
 
 set -e
 grep "write_bytes:50000" "$out_dir"-ser/lsm-category-all >/dev/null
 grep "read_bytes:50000" "$out_dir"-ser/lsm-category-all >/dev/null
 set +e
 
-./tests/rosd-test-simple --codes-config="${srcdir}"/tests/conf/rosd-test-simple-big.conf --lp-io-dir="$out_dir"-ser-big
+./tests/test-simple --codes-config="${srcdir}"/tests/conf/test-simple-big.conf --lp-io-dir="$out_dir"-ser-big
 
 set -e
 grep "write_bytes:500000" "$out_dir"-ser-big/lsm-category-all >/dev/null
@@ -24,7 +24,7 @@ grep "read_bytes:500000" "$out_dir"-ser-big/lsm-category-all >/dev/null
 set +e
 
 # TODO
-mpirun -np 4 ./tests/rosd-test-simple --sync=3 --codes-config="${srcdir}"/tests/conf/rosd-test-simple-big.conf --lp-io-dir="$out_dir"-opt-big
+mpirun -np 4 ./tests/test-simple --sync=3 --codes-config="${srcdir}"/tests/conf/test-simple-big.conf --lp-io-dir="$out_dir"-opt-big
 
 set -e
 grep "write_bytes:500000" "$out_dir"-opt-big/lsm-category-all >/dev/null

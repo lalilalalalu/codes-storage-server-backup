@@ -13,6 +13,7 @@
 #include <codes/jenkins-hash.h>
 
 #include "../codes/codes-store-lp.h"
+#include "test-client.h"
 
 #define CLIENT_LP_NM "test-client"
 

@@ -4,8 +4,8 @@
  *
  */
 
-#ifndef ROSD_H
-#define ROSD_H
+#ifndef CODES_STORE_LP_INTERNAL_H
+#define CODES_STORE_LP_INTERNAL_H
 
 #include <ross.h>
 #include <codes/codes-store-lp.h>
@@ -14,7 +14,7 @@
 #include "codes/quicklist.h"
 #include "codes/lp-msg.h"
 #include "codes/resource-lp.h"
-#include "rosd-creq.h"
+#include "codes-store-pipeline.h"
 
 #define ROSD_REQ_CONTROL_SZ 128
 

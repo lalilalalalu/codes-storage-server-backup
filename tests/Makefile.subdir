@@ -1,8 +1,8 @@
-check_PROGRAMS += tests/rosd-test-simple
+check_PROGRAMS += tests/test-simple
 
-TESTS += tests/rosd-test-simple.sh
+TESTS += tests/test-simple.sh
 
-tests_rosd_test_simple_SOURCES = \
-	tests/rosd-test-simple.c \
-	tests/rosd-test-client.h \
-	tests/rosd-test-client.c
+tests_test_simple_SOURCES = \
+	tests/test-simple.c \
+	tests/test-client.h \
+	tests/test-client.c
