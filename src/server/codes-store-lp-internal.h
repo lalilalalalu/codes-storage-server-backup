@@ -10,10 +10,8 @@
 #include <ross.h>
 #include <codes/codes-store-lp.h>
 #include <codes/codes-callback.h>
-#include "codes/lp-io.h"
-#include "codes/quicklist.h"
-#include "codes/lp-msg.h"
-#include "codes/resource-lp.h"
+#include <codes/lp-msg.h>
+#include <codes/resource-lp.h>
 #include "codes-store-pipeline.h"
 
 #define CS_REQ_CONTROL_SZ 128

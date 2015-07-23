@@ -7,15 +7,15 @@
 #include <string.h>
 #include <assert.h>
 #include <codes/model-net.h>
+#include <codes/model-net-sched.h>
 #include <codes/codes_mapping.h>
 #include <codes/lp-type-lookup.h>
 #include <codes/jenkins-hash.h>
-#include <codes/codes.h>
 #include <codes/lp-io.h>
 #include <codes/local-storage-model.h>
-#include <codes/model-net-sched.h>
 #include <codes/rc-stack.h>
 #include <codes/codes-callback.h>
+#include <codes/quicklist.h>
 
 #include "codes-store-lp-internal.h"
 #include "codes-store-pipeline.h"
@@ -159,16 +159,14 @@ void codes_store_configure(int model_net_id){
 
     mn_id = model_net_id;
 
-    /* until we get rid of RF logic... */
-    int rc;
-
     // get the number of threads and the pipeline buffer size
     // if not available, no problem - use a default of 4 threads, 4MB per
     // thread
-    rc = configuration_get_value_int(&config, CODES_STORE_LP_NAME,
+    configuration_get_value_int(&config, CODES_STORE_LP_NAME,
             "req_threads", NULL, &num_threads);
-    rc = configuration_get_value_int(&config, CODES_STORE_LP_NAME,
+    configuration_get_value_int(&config, CODES_STORE_LP_NAME,
             "thread_buf_sz", NULL, &pipeline_unit_size);
+    assert(num_threads > 0 && pipeline_unit_size > 0);
 
     /* done!!! */
 }

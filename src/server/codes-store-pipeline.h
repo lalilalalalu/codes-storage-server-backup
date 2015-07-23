@@ -7,14 +7,14 @@
 #ifndef CODES_STORE_PIPELINE_H
 #define CODES_STORE_PIPELINE_H
 
-#include "codes/lp-msg.h"
+#include <stdint.h>
 
 typedef struct cs_pipelined_req cs_pipelined_req;
 typedef struct cs_pipelined_thread cs_pipelined_thread;
 
 // threaded pipelining of request buffers
 struct cs_pipelined_req {
-    // remaining bytes of request, decremented when thread inits client rdma 
+    // remaining bytes of request, decremented when thread inits client rdma
     // so we can properly determine some boundary conditions
     uint64_t rem;
     // actual bytes received of request (recv-based protocols check against this)
@@ -28,7 +28,7 @@ struct cs_pipelined_req {
     // total # of threads, initialized threads, threads waiting on mem, idle
     // threads (for op completion)
     int nthreads, nthreads_init, nthreads_alloc_waiting, nthreads_fin;
-    // chunk id to read from next 
+    // chunk id to read from next
     int thread_chunk_id_curr;
     // max buffer size per thread
     uint64_t punit_size;
@@ -47,7 +47,7 @@ struct cs_pipelined_thread {
 };
 
 cs_pipelined_req* cs_pipeline_init(
-        int nthreads, 
+        int nthreads,
         uint64_t punit_size_max,
         uint64_t req_size);
 
