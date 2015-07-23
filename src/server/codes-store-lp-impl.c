@@ -31,7 +31,7 @@
 // lp specific debug messages (producing a coarser-grain log)
 #define CS_LP_DBG 0
 #define lprintf(_fmt, ...) \
-    do {if (CS_THREAD_DBG) printf(_fmt, __VA_ARGS__);} while (0)
+    do {if (CS_LP_DBG) printf(_fmt, __VA_ARGS__);} while (0)
 
 // print rng stats at end (messes up some results scripts)
 #define CS_PRINT_RNG 0
