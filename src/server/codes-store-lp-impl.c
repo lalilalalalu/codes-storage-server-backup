@@ -175,7 +175,7 @@ void codes_store_configure(int model_net_id){
 
 // helpers to send response to client
 static void codes_store_send_resp(
-        int rc,
+        codes_store_ret_t rc,
         struct codes_cb_params const * p,
         tw_lp *lp)
 {
@@ -191,7 +191,8 @@ static void codes_store_send_resp(
     int *tag = (int*)(data + p->info.tag_offset);
     *tag = p->tag;
 
-    int *cli_rc  = (int*)(data + p->info.cb_ret_offset);
+    codes_store_ret_t *cli_rc  =
+        (codes_store_ret_t*)(data + p->info.cb_ret_offset);
     *cli_rc = rc;
 
     int prio = 0;
@@ -678,7 +679,7 @@ static void handle_complete_disk_op(
     }
 
     if (!m->is_data_op) {
-        codes_store_send_resp(0, &qi->cli_cb, lp);
+        codes_store_send_resp(CODES_STORE_OK, &qi->cli_cb, lp);
         qlist_del(&qi->ql);
         rc_stack_push(lp, qi, free_qitem, ns->finished_ops);
         b->c1 = 1;
@@ -715,7 +716,7 @@ static void handle_complete_disk_op(
             // first to see all committed data acks the client
             if (p->committed == qi->req.xfer_size) {
                 b->c0 = 1;
-                codes_store_send_resp(0, &qi->cli_cb, lp);
+                codes_store_send_resp(CODES_STORE_OK, &qi->cli_cb, lp);
             }
 
             // no more work to do
@@ -837,7 +838,7 @@ void handle_complete_chunk_send(
         // if we are the last thread to send data to the client then ack
         if (p->forwarded == qi->req.xfer_size) {
             b->c2 = 1;
-            codes_store_send_resp(0, &qi->cli_cb, lp);
+            codes_store_send_resp(CODES_STORE_OK, &qi->cli_cb, lp);
         }
         // if we are the last thread then cleanup req and ack to client
         if (p->nthreads_fin == p->nthreads) {

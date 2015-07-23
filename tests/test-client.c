@@ -38,7 +38,7 @@ struct test_client_msg
 {
     msg_header h;
     int tag;
-    int ret;
+    codes_store_ret_t ret;
 };
 
 static void next(
@@ -110,6 +110,7 @@ static void test_client_event_rc(
     switch(m->h.event_type) {
         case TEST_CLI_ACK:
             printf("%lu: received ack (rc)\n", lp->gid);
+            assert(m->ret == CODES_STORE_OK);
             if (b->c0) {
                 next_rc(0, ns, m, lp);
                 ns->num_complete_rd--;

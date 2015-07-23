@@ -39,14 +39,14 @@ void codes_store_send_req(
         msg_header const * h,
         struct codes_cb_info const * cb)
 {
-    SANITY_CHECK_CB(cb, int);
+    SANITY_CHECK_CB(cb, codes_store_ret_t);
 
     /* get the LP */
     tw_lpid store_lpid = codes_store_get_store_lpid(dest_id, NULL, 0);
 
     cs_msg m;
     msg_set_header(cs_magic, CS_RECV_CLI_REQ, sender->gid, &m.h);
-    struct ev_recv_cli_req *creq = &m.u.recv_cli_req;
+    GETEV(creq, &m, recv_cli_req);
 
     creq->req = *r;
     creq->callback.info = *cb;

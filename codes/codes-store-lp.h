@@ -34,6 +34,13 @@ struct codes_store_request {
     uint64_t xfer_size;
 };
 
+enum codes_store_ret {
+    CODES_STORE_OK = 0,
+    CODES_STORE_ERR_OTHER
+};
+
+typedef enum codes_store_ret codes_store_ret_t;
+
 // param init sugar
 void codes_store_init_req(
         enum codes_store_req_type type,
