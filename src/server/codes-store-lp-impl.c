@@ -44,14 +44,6 @@ static int mn_id;
 static int num_threads = 4;
 static int pipeline_unit_size = (1<<22);
 
-/* for rc-stack: free fn for pipeline_qitem */
-static void free_qitem(void * ptr)
-{
-    cs_qitem *qi = ptr;
-    if (qi->preq) cs_pipeline_destroy(qi->preq);
-    free(qi);
-}
-
 struct cs_state {
     // my logical (not lp) id
     int server_index;
@@ -79,6 +71,26 @@ struct cs_state {
 
 typedef struct cs_state cs_state;
 
+// queue item for pending operations
+struct cs_qitem {
+    // my op id
+    int op_id;
+    struct codes_store_request req;
+    struct codes_cb_params cli_cb;
+    cs_pipelined_req *preq;
+    struct qlist_head ql;
+};
+typedef struct cs_qitem cs_qitem;
+
+/* for rc-stack */
+static void free_qitem(void * ptr)
+{
+    cs_qitem *qi = ptr;
+    if (qi->preq) cs_pipeline_destroy(qi->preq);
+    free(qi);
+}
+
+
 ///// BEGIN LP, EVENT PROCESSING FUNCTION DECLS /////
 
 // ROSS LP processing functions
@@ -96,57 +108,25 @@ static void cs_event_handler_rc(
 static void cs_finalize(cs_state *ns, tw_lp *lp);
 
 // event handlers
-static void handle_recv_io_req(
-        cs_state * ns,
-        tw_bf *b,
-        cs_msg * m,
-        tw_lp * lp);
-static void handle_pipeline_alloc_callback(
-        cs_state * ns,
-        tw_bf *b,
-        cs_msg * m,
-        tw_lp * lp);
-static void handle_recv_chunk(
-        cs_state * ns,
-        tw_bf *b,
-        cs_msg * m,
-        tw_lp * lp);
-static void handle_complete_disk_op(
-        cs_state * ns,
-        tw_bf *b,
-        cs_msg * m,
-        tw_lp * lp);
-static void handle_complete_chunk_send(
-        cs_state * ns,
-        tw_bf *b,
-        cs_msg * m,
-        tw_lp * lp);
+#define X(a,bb,c) \
+static void handle_##bb( \
+        cs_state * ns, \
+        tw_bf *b, \
+        msg_header const *h, \
+        struct ev_##bb *m, \
+        tw_lp *lp);
+CS_EVENTS
+#undef X
 
-static void handle_recv_io_req_rc(
-        cs_state * ns,
-        tw_bf *b,
-        cs_msg * m,
-        tw_lp * lp);
-static void handle_pipeline_alloc_callback_rc(
-        cs_state * ns,
-        tw_bf *b,
-        cs_msg * m,
-        tw_lp * lp);
-static void handle_recv_chunk_rc(
-        cs_state * ns,
-        tw_bf *b,
-        cs_msg * m,
-        tw_lp * lp);
-static void handle_complete_disk_op_rc(
-        cs_state * ns,
-        tw_bf *b,
-        cs_msg * m,
-        tw_lp * lp);
-static void handle_complete_chunk_send_rc(
-        cs_state * ns,
-        tw_bf *b,
-        cs_msg * m,
-        tw_lp * lp);
+#define X(a,bb,c) \
+static void handle_##bb##_rc( \
+        cs_state * ns, \
+        tw_bf *b, \
+        msg_header const *h, \
+        struct ev_##bb *m, \
+        tw_lp *lp);
+CS_EVENTS
+#undef X
 
 ///// END LP, EVENT PROCESSING FUNCTION DECLS /////
 
@@ -257,25 +237,17 @@ void cs_event_handler(
     /* perform a garbage collection */
     rc_stack_gc(lp, ns->finished_ops);
 
+#define X(a,bb,c) \
+    case a: \
+        handle_##bb(ns, b, &m->h, &m->u.bb, lp); \
+        break;
+
     switch (m->h.event_type){
-        case RECV_CLI_REQ:
-            handle_recv_io_req(ns, b, m, lp);
-            break;
-        case PIPELINE_ALLOC_CALLBACK:
-            handle_pipeline_alloc_callback(ns, b, m, lp);
-            break;
-        case RECV_CHUNK:
-            handle_recv_chunk(ns, b, m, lp);
-            break;
-        case COMPLETE_DISK_OP:
-            handle_complete_disk_op(ns, b, m, lp);
-            break;
-        case COMPLETE_CHUNK_SEND:
-            handle_complete_chunk_send(ns, b, m, lp);
-            break;
+        CS_EVENTS
         default:
             tw_error(TW_LOC, "unknown cs event type");
     }
+#undef X
 }
 
 void cs_event_handler_rc(
@@ -297,22 +269,12 @@ void cs_event_handler_rc(
         return;
     }
 
+#define X(a,bb,c) \
+    case a: \
+        handle_##bb##_rc(ns, b, &m->h, &m->u.bb, lp); \
+        break;
     switch (m->h.event_type){
-        case RECV_CLI_REQ:
-            handle_recv_io_req_rc(ns, b, m, lp);
-            break;
-        case PIPELINE_ALLOC_CALLBACK:
-            handle_pipeline_alloc_callback_rc(ns, b, m, lp);
-            break;
-        case RECV_CHUNK:
-            handle_recv_chunk_rc(ns, b, m, lp);
-            break;
-        case COMPLETE_DISK_OP:
-            handle_complete_disk_op_rc(ns, b, m, lp);
-            break;
-        case COMPLETE_CHUNK_SEND:
-            handle_complete_chunk_send_rc(ns, b, m, lp);
-            break;
+        CS_EVENTS
         default:
             tw_error(TW_LOC, "unknown cs event type");
     }
@@ -380,7 +342,7 @@ static void pipeline_alloc_event(
     id.tid = tid;
 
     msg_header h;
-    msg_set_header(cs_magic, PIPELINE_ALLOC_CALLBACK, lp->gid, &h);
+    msg_set_header(cs_magic, CS_PIPELINE_ALLOC_CALLBACK, lp->gid, &h);
 
     // note - this is a "blocking" call - we won't get the callback until 
     // allocation succeeded
@@ -391,33 +353,34 @@ static void pipeline_alloc_event(
             offsetof(cs_msg, u.palloc_callback.id), &id, lp);
 }
 
-void handle_recv_io_req(
+void handle_recv_cli_req(
         cs_state * ns,
         tw_bf *b,
-        cs_msg * m,
+        msg_header const *h,
+        struct ev_recv_cli_req * m,
         tw_lp * lp){
 
     // initialize a pipelining operation
     cs_qitem *qi = malloc(sizeof(cs_qitem)); 
     qi->op_id = ns->op_idx_pl++;
-    qi->req = m->u.creq.req;
-    qi->cli_cb = m->u.creq.callback;
+    qi->req = m->req;
+    qi->cli_cb = m->callback;
     qi->preq = NULL;
     qlist_add_tail(&qi->ql, &ns->pending_ops);
 
     // save op id for rc
-    m->u.creq.rc.op_id = qi->op_id;
+    m->rc.op_id = qi->op_id;
 
     lprintf("%lu: new req id:%d from %lu\n", lp->gid, qi->op_id,
-            m->h.src);
+            h->src);
 
     /* metadata op - avoid the pipelining events */
-    if (m->u.creq.req.type == CSREQ_OPEN
-            || m->u.creq.req.type == CSREQ_CREATE) {
+    if (m->req.type == CSREQ_OPEN
+            || m->req.type == CSREQ_CREATE) {
         tw_event *e_local;
         cs_msg *m_local;
         cs_callback_id cb_id;
-        int is_create = m->u.creq.req.type == CSREQ_CREATE;
+        int is_create = m->req.type == CSREQ_CREATE;
 
         cb_id.op_id = qi->op_id;
         cb_id.tid = -1;
@@ -427,9 +390,11 @@ void handle_recv_io_req(
                 is_create ? LSM_WRITE_REQUEST : LSM_READ_REQUEST,
                 sizeof(*m_local), lp, 0.0);
         m_local = lsm_event_data(e_local);
-        msg_set_header(cs_magic, COMPLETE_DISK_OP, lp->gid, &m_local->h);
-        m_local->u.complete_sto.id = cb_id;
-        m_local->u.complete_sto.is_data_op = 0;
+        msg_set_header(cs_magic, CS_COMPLETE_DISK_OP, lp->gid, &m_local->h);
+
+        GETEV(compl, m_local, complete_disk_op);
+        compl->id = cb_id;
+        compl->is_data_op = 0;
         tw_event_send(e_local);
     }
     else {
@@ -447,35 +412,36 @@ void handle_recv_io_req(
 // c2 - assuming  c0 and !c1, thread was not the last thread and issued an alloc
 // c3 - assuming !c0, thread is the last active, so pipeline request was deleted
 //      (and moved to the finished queue)
-void handle_pipeline_alloc_callback(
+void handle_palloc_callback(
         cs_state * ns,
         tw_bf *b,
-        cs_msg * m,
+        msg_header const * h,
+        struct ev_palloc_callback * m,
         tw_lp * lp){
 
     // getting a failed allocation at this point is a fatal error since we are
     // using the blocking version of buffer acquisition
-    assert(!m->u.palloc_callback.cb.ret);
+    assert(!m->cb.ret);
 
     // find the corresponding operation
     struct qlist_head *ent = NULL;
     cs_qitem *qi = NULL; 
     qlist_for_each(ent, &ns->pending_ops){
         qi = qlist_entry(ent, cs_qitem, ql);
-        if (qi->op_id == m->u.palloc_callback.id.op_id){
+        if (qi->op_id == m->id.op_id){
             break;
         }
     }
     if (ent == &ns->pending_ops){
         int written = sprintf(ns->output_buf, 
                 "ERROR: pipeline op with id %d not found", 
-                m->u.palloc_callback.id.op_id);
+                m->id.op_id);
         lp_io_write(lp->gid, "errors", written, ns->output_buf);
         ns->error_ct = 1;
         return;
     }
 
-    int tid = m->u.palloc_callback.id.tid;
+    int tid = m->id.tid;
 
     cs_pipelined_req *p = qi->preq;
 
@@ -510,9 +476,10 @@ void handle_pipeline_alloc_callback(
             cs_msg m_recv;
             // note: in the header, we actually want the src LP to be the
             // client LP rather than our own
-            msg_set_header(cs_magic, RECV_CHUNK, qi->cli_cb.h.src, &m_recv.h);
-            m_recv.u.recv_chunk.id.op_id = qi->op_id;
-            m_recv.u.recv_chunk.id.tid = tid;
+            msg_set_header(cs_magic, CS_RECV_CHUNK, qi->cli_cb.h.src, &m_recv.h);
+            GETEV(recv, &m_recv, recv_chunk);
+            recv->id.op_id = qi->op_id;
+            recv->id.tid = tid;
             // issue "pull" of data from client
             int prio = 0;
             model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
@@ -533,10 +500,11 @@ void handle_pipeline_alloc_callback(
                     lp,
                     0.0);
             cs_msg *m_cb = lsm_event_data(e);
-            msg_set_header(cs_magic, COMPLETE_DISK_OP, lp->gid, &m_cb->h);
-            m_cb->u.complete_sto.id.op_id = qi->op_id;
-            m_cb->u.complete_sto.id.tid = tid;
-            m_cb->u.complete_sto.is_data_op = 1;
+            msg_set_header(cs_magic, CS_COMPLETE_DISK_OP, lp->gid, &m_cb->h);
+            GETEV(compl, m_cb, complete_disk_op);
+            compl->id.op_id = qi->op_id;
+            compl->id.tid = tid;
+            compl->is_data_op = 1;
             tw_event_send(e);
         }
         else { assert(0); }
@@ -550,8 +518,8 @@ void handle_pipeline_alloc_callback(
         // finished state (see NOTE below)
         if (p->rem == 0){
             b->c1 = 1;
-            m->u.palloc_callback.rc.nthreads_init = p->nthreads_init;
-            m->u.palloc_callback.rc.nthreads_fin = p->nthreads_fin;
+            m->rc.nthreads_init = p->nthreads_init;
+            m->rc.nthreads_fin = p->nthreads_fin;
             // finish all remaining *non*-initialized threads (but not me)
             p->nthreads_fin += p->nthreads - p->nthreads_init;
             p->nthreads_init = p->nthreads;
@@ -559,7 +527,7 @@ void handle_pipeline_alloc_callback(
         // more threads to allocate
         else if (p->nthreads_init < p->nthreads){
             b->c2 = 1;
-            pipeline_alloc_event(b, lp, m->u.palloc_callback.id.op_id, p);
+            pipeline_alloc_event(b, lp, m->id.op_id, p);
         }
         // else nothing to do
     }
@@ -582,8 +550,8 @@ void handle_pipeline_alloc_callback(
                 p->nthreads - p->nthreads_init+1);
 
         // set rc vars
-        m->u.palloc_callback.rc.nthreads_init = p->nthreads_init;
-        m->u.palloc_callback.rc.nthreads_fin = p->nthreads_fin;
+        m->rc.nthreads_init = p->nthreads_init;
+        m->rc.nthreads_fin = p->nthreads_fin;
         // finish all remaining *non*-initialized threads (*and* me)
         p->nthreads_fin += p->nthreads - p->nthreads_init + 1;
         p->nthreads_init = p->nthreads;
@@ -612,27 +580,28 @@ void handle_pipeline_alloc_callback(
 void handle_recv_chunk(
         cs_state * ns,
         tw_bf *b,
-        cs_msg * m,
+        msg_header const * h,
+        struct ev_recv_chunk * m,
         tw_lp * lp){
     // first look up pipeline request
     struct qlist_head *ent = NULL;
     cs_qitem *qi = NULL; 
     qlist_for_each(ent, &ns->pending_ops){
         qi = qlist_entry(ent, cs_qitem, ql);
-        if (qi->op_id == m->u.recv_chunk.id.op_id){
+        if (qi->op_id == m->id.op_id){
             break;
         }
     }
     if (ent == &ns->pending_ops){
         int written = sprintf(ns->output_buf, 
                 "ERROR: pipeline op with id %d not found (chunk recv)", 
-                m->u.recv_chunk.id.op_id);
+                m->id.op_id);
         lp_io_write(lp->gid, "errors", written, ns->output_buf);
         ns->error_ct = 1;
         return;
     }
 
-    int tid = m->u.recv_chunk.id.tid;
+    int tid = m->id.tid;
     cs_pipelined_req *p = qi->preq;
     cs_pipelined_thread *t = &p->threads[tid];
     // RC bug - allocation was reversed locally, then we got a response from the
@@ -647,7 +616,7 @@ void handle_recv_chunk(
         return;
     }
 
-    lprintf("%lu: received chunk from %lu\n", lp->gid, m->h.src);
+    lprintf("%lu: received chunk from %lu\n", lp->gid, h->src);
 
     p->received += t->chunk_size;
 
@@ -669,10 +638,11 @@ void handle_recv_chunk(
             lp,
             0.0);
     cs_msg *m_store = lsm_event_data(e_store);
-    msg_set_header(cs_magic, COMPLETE_DISK_OP, lp->gid, &m_store->h);
-    m_store->u.complete_sto.id.op_id = qi->op_id;
-    m_store->u.complete_sto.id.tid = tid;
-    m_store->u.complete_sto.is_data_op = 1;
+    msg_set_header(cs_magic, CS_COMPLETE_DISK_OP, lp->gid, &m_store->h);
+    GETEV(compl, m_store, complete_disk_op);
+    compl->id.op_id = qi->op_id;
+    compl->id.tid = tid;
+    compl->is_data_op = 1;
     tw_event_send(e_store);
 }
 
@@ -684,10 +654,11 @@ void handle_recv_chunk(
 static void handle_complete_disk_op(
         cs_state * ns,
         tw_bf *b,
-        cs_msg * m,
+        msg_header const * h,
+        struct ev_complete_disk_op * m,
         tw_lp * lp){
     cs_callback_id *id;
-    id = &m->u.complete_sto.id;
+    id = &m->id;
 
     // find the pipeline op
     struct qlist_head *ent = NULL;
@@ -702,13 +673,13 @@ static void handle_complete_disk_op(
         int written = sprintf(ns->output_buf, 
                 "ERROR: pipeline op with id %d not found on LP %lu (async_completion,%s)", 
                 id->op_id, lp->gid,
-                m->h.event_type==COMPLETE_DISK_OP ? "disk" : "fwd");
+                h->event_type==CS_COMPLETE_DISK_OP ? "disk" : "fwd");
         lp_io_write(lp->gid, "errors", written, ns->output_buf);
         ns->error_ct = 1;
         return;
     }
 
-    if (!m->u.complete_sto.is_data_op) {
+    if (!m->is_data_op) {
         codes_store_send_resp(0, &qi->cli_cb, lp);
         qlist_del(&qi->ql);
         rc_stack_push(lp, qi, free_qitem, ns->finished_ops);
@@ -723,8 +694,8 @@ static void handle_complete_disk_op(
         p->committed += t->chunk_size;
 
         // go ahead and set the rc variables, just in case
-        m->u.complete_sto.rc.chunk_id = t->chunk_id;
-        m->u.complete_sto.rc.chunk_size = t->chunk_size;
+        m->rc.chunk_id = t->chunk_id;
+        m->rc.chunk_size = t->chunk_size;
 
         tw_lpid cli_lp = qi->cli_cb.h.src;
 
@@ -732,8 +703,9 @@ static void handle_complete_disk_op(
             /* send to client without a remote message and with a local "chunk
              * done" message */
             cs_msg m_loc;
-            msg_set_header(cs_magic, COMPLETE_CHUNK_SEND, lp->gid, &m_loc.h);
-            m_loc.u.complete_chunk_send.id = *id;
+            msg_set_header(cs_magic, CS_COMPLETE_CHUNK_SEND, lp->gid, &m_loc.h);
+            GETEV(compl, &m_loc, complete_chunk_send);
+            compl->id = *id;
             model_net_event(mn_id, CODES_STORE_LP_NAME, cli_lp, t->chunk_size,
                     0.0, 0, NULL, sizeof(m_loc), &m_loc, lp);
         }
@@ -769,7 +741,7 @@ static void handle_complete_disk_op(
                     // TODO: mem mgmt
                     lprintf("%lu: rm op %d (async compl %s)\n", lp->gid,
                             qi->op_id,
-                            m->h.event_type==COMPLETE_DISK_OP ? "disk":"fwd");
+                            h->event_type==CS_COMPLETE_DISK_OP ? "disk":"fwd");
                     qlist_del(&qi->ql);
                     ns->bytes_written_local += p->committed;
                     rc_stack_push(lp, qi, free_qitem, ns->finished_ops);
@@ -796,8 +768,9 @@ static void handle_complete_disk_op(
 
                 // setup, send message
                 cs_msg m_recv;
-                msg_set_header(cs_magic, RECV_CHUNK, cli_lp, &m_recv.h);
-                m_recv.u.recv_chunk.id = *id;
+                msg_set_header(cs_magic, CS_RECV_CHUNK, cli_lp, &m_recv.h);
+                GETEV(recv, &m_recv, recv_chunk);
+                recv->id = *id;
                 // control message gets high priority
                 int prio = 0;
                 model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
@@ -817,12 +790,13 @@ static void handle_complete_disk_op(
 void handle_complete_chunk_send(
         cs_state * ns,
         tw_bf *b,
-        cs_msg * m,
+        msg_header const * h,
+        struct ev_complete_chunk_send * m,
         tw_lp * lp) {
     // find the pipeline op
     struct qlist_head *ent = NULL;
     cs_qitem *qi = NULL;
-    cs_callback_id id = m->u.complete_chunk_send.id;
+    cs_callback_id id = m->id;
     qlist_for_each(ent, &ns->pending_ops){
         qi = qlist_entry(ent, cs_qitem, ql);
         if (qi->op_id == id.op_id){
@@ -842,8 +816,8 @@ void handle_complete_chunk_send(
     cs_pipelined_req *p = qi->preq;
     cs_pipelined_thread *t = &p->threads[id.tid];
     // in either case, set chunk info for rc
-    m->u.complete_chunk_send.rc.chunk_id = t->chunk_id;
-    m->u.complete_chunk_send.rc.chunk_size = t->chunk_size;
+    m->rc.chunk_id = t->chunk_id;
+    m->rc.chunk_size = t->chunk_size;
 
     p->forwarded += t->chunk_size;
 
@@ -906,9 +880,10 @@ void handle_complete_chunk_send(
                 0.0);
 
         cs_msg *m_cb = lsm_event_data(e);
-        msg_set_header(cs_magic, COMPLETE_DISK_OP, lp->gid, &m_cb->h);
-        m_cb->u.complete_sto.id = id;
-        m_cb->u.complete_sto.is_data_op = 1;
+        msg_set_header(cs_magic, CS_COMPLETE_DISK_OP, lp->gid, &m_cb->h);
+        GETEV(compl, m_cb, complete_disk_op);
+        compl->id = id;
+        compl->is_data_op = 1;
         tw_event_send(e);
     }
 }
@@ -923,13 +898,14 @@ static void pipeline_alloc_event_rc(
     resource_lp_get_rc(lp);
 }
 
-void handle_recv_io_req_rc(
+void handle_recv_cli_req_rc(
         cs_state * ns,
         tw_bf *b,
-        cs_msg * m,
+        msg_header const * h,
+        struct ev_recv_cli_req * m,
         tw_lp * lp){
 
-    int op_id_prev = m->u.creq.rc.op_id;
+    int op_id_prev = m->rc.op_id;
 
     // find the queue item (removal from list can be from any location, rc
     // pushes it back to the back, so we have to iterate)
@@ -946,7 +922,7 @@ void handle_recv_io_req_rc(
     lprintf("%lu: new req rc id:%d from %lu\n", lp->gid, qi->op_id,
             qi->cli_cb.h.src);
 
-    if (m->u.creq.req.type == CSREQ_OPEN) {
+    if (m->req.type == CSREQ_OPEN) {
         lsm_event_new_reverse(lp);
         return;
     }
@@ -966,10 +942,11 @@ void handle_recv_io_req_rc(
 // c2 - assuming  c0 and !c1, thread was not the last thread and issued an alloc
 // c3 - assuming !c0, thread is the last active, so pipeline request was deleted
 //      (and moved to the finished queue)
-void handle_pipeline_alloc_callback_rc(
+void handle_palloc_callback_rc(
         cs_state * ns,
         tw_bf *b,
-        cs_msg * m,
+        msg_header const * h,
+        struct ev_palloc_callback * m,
         tw_lp * lp){
     // find the request 
     cs_qitem *qi = NULL;
@@ -990,14 +967,14 @@ void handle_pipeline_alloc_callback_rc(
         struct qlist_head *ent = NULL;
         qlist_for_each(ent, &ns->pending_ops){
             qi = qlist_entry(ent, cs_qitem, ql);
-            if (qi->op_id == m->u.palloc_callback.id.op_id){
+            if (qi->op_id == m->id.op_id){
                 break;
             }
         }
         assert(ent != &ns->pending_ops);
     }
     
-    int tid = m->u.palloc_callback.id.tid;
+    int tid = m->id.tid;
 
     cs_pipelined_req *p = qi->preq;
     if (b->c0){
@@ -1021,8 +998,8 @@ void handle_pipeline_alloc_callback_rc(
                 p->nthreads_init, p->nthreads_alloc_waiting,
                 p->nthreads_fin);
         if (b->c1){
-            p->nthreads_init = m->u.palloc_callback.rc.nthreads_init;
-            p->nthreads_fin  = m->u.palloc_callback.rc.nthreads_fin;
+            p->nthreads_init = m->rc.nthreads_init;
+            p->nthreads_fin  = m->rc.nthreads_fin;
         }
         else if (b->c2){
             pipeline_alloc_event_rc(b, lp, qi->op_id, p);
@@ -1033,11 +1010,11 @@ void handle_pipeline_alloc_callback_rc(
         tprintf("%lu,%d: thread %d alloc'd after compl rc, "
                 "tid counts (%d-%d, %d+1, %d-%d)\n",
                 lp->gid, qi->op_id, tid, p->nthreads_init,
-                p->nthreads_init - m->u.palloc_callback.rc.nthreads_init,
+                p->nthreads_init - m->rc.nthreads_init,
                 p->nthreads_alloc_waiting, p->nthreads_fin,
-                p->nthreads_fin - m->u.palloc_callback.rc.nthreads_fin);
-        p->nthreads_init = m->u.palloc_callback.rc.nthreads_init;
-        p->nthreads_fin  = m->u.palloc_callback.rc.nthreads_fin;
+                p->nthreads_fin - m->rc.nthreads_fin);
+        p->nthreads_init = m->rc.nthreads_init;
+        p->nthreads_fin  = m->rc.nthreads_fin;
         // note: undid the queue deletion at beginning of RC
     }
     p->nthreads_alloc_waiting++;
@@ -1045,14 +1022,15 @@ void handle_pipeline_alloc_callback_rc(
 void handle_recv_chunk_rc(
         cs_state * ns,
         tw_bf *b,
-        cs_msg * m,
+        msg_header const * h,
+        struct ev_recv_chunk * m,
         tw_lp * lp){
     // first look up pipeline request
     struct qlist_head *ent = NULL;
     cs_qitem *qi = NULL; 
     qlist_for_each(ent, &ns->pending_ops){
         qi = qlist_entry(ent, cs_qitem, ql);
-        if (qi->op_id == m->u.recv_chunk.id.op_id){
+        if (qi->op_id == m->id.op_id){
             break;
         }
     }
@@ -1060,7 +1038,7 @@ void handle_recv_chunk_rc(
 
     lsm_event_new_reverse(lp);
 
-    int tid = m->u.recv_chunk.id.tid;
+    int tid = m->id.tid;
     cs_pipelined_thread *t = &qi->preq->threads[tid];
     qi->preq->received -= t->chunk_size;
 }
@@ -1068,12 +1046,13 @@ void handle_recv_chunk_rc(
 static void handle_complete_disk_op_rc(
         cs_state * ns,
         tw_bf *b,
-        cs_msg * m,
+        msg_header const * h,
+        struct ev_complete_disk_op * m,
         tw_lp * lp){
     cs_callback_id *id;
     int prev_chunk_id;
     uint64_t prev_chunk_size;
-    id = &m->u.complete_sto.id;
+    id = &m->id;
 
     // get the operation
     cs_qitem *qi = NULL;
@@ -1081,10 +1060,10 @@ static void handle_complete_disk_op_rc(
         // request was "deleted", put back into play
         qi = rc_stack_pop(ns->finished_ops);
         lprintf("%lu: add op %d (async compl %s rc)\n", lp->gid, qi->op_id,
-                m->h.event_type==COMPLETE_DISK_OP ? "disk" : "fwd");
+                h->event_type==CS_COMPLETE_DISK_OP ? "disk" : "fwd");
         qlist_add_tail(&qi->ql, &ns->pending_ops);
         // undo the stats
-        if (m->u.complete_sto.is_data_op)
+        if (m->is_data_op)
             ns->bytes_written_local -= qi->preq->committed;
     }
     else{
@@ -1098,7 +1077,7 @@ static void handle_complete_disk_op_rc(
         assert(ent != &ns->pending_ops);
     }
 
-    if (!m->u.complete_sto.is_data_op) {
+    if (!m->is_data_op) {
         codes_store_send_resp_rc(lp);
     }
     else {
@@ -1111,8 +1090,8 @@ static void handle_complete_disk_op_rc(
             prev_chunk_id = -1; // unused
         }
         else {
-            prev_chunk_size = m->u.complete_sto.rc.chunk_size;
-            prev_chunk_id   = m->u.complete_sto.rc.chunk_id;
+            prev_chunk_size = m->rc.chunk_size;
+            prev_chunk_id   = m->rc.chunk_id;
         }
 
         lprintf("%lu: commit:%lu-%lu\n", lp->gid,
@@ -1165,9 +1144,10 @@ static void handle_complete_disk_op_rc(
 void handle_complete_chunk_send_rc(
         cs_state * ns,
         tw_bf *b,
-        cs_msg * m,
+        msg_header const * h,
+        struct ev_complete_chunk_send * m,
         tw_lp * lp) {
-    cs_callback_id id = m->u.complete_chunk_send.id;
+    cs_callback_id id = m->id;
 
     // get the operation
     cs_qitem *qi = NULL;
@@ -1206,8 +1186,8 @@ void handle_complete_chunk_send_rc(
         lsm_event_new_reverse(lp);
     }
 
-    t->chunk_id = m->u.complete_chunk_send.rc.chunk_id;
-    t->chunk_size = m->u.complete_chunk_send.rc.chunk_size;
+    t->chunk_id = m->rc.chunk_id;
+    t->chunk_size = m->rc.chunk_size;
     p->forwarded -= t->chunk_size;
 }
 

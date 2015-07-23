@@ -45,12 +45,13 @@ void codes_store_send_req(
     tw_lpid store_lpid = codes_store_get_store_lpid(dest_id, NULL, 0);
 
     cs_msg m;
-    msg_set_header(cs_magic, RECV_CLI_REQ, sender->gid, &m.h);
+    msg_set_header(cs_magic, CS_RECV_CLI_REQ, sender->gid, &m.h);
+    struct ev_recv_cli_req *creq = &m.u.recv_cli_req;
 
-    m.u.creq.req = *r;
-    m.u.creq.callback.info = *cb;
-    m.u.creq.callback.h = *h;
-    m.u.creq.callback.tag = tag;
+    creq->req = *r;
+    creq->callback.info = *cb;
+    creq->callback.h = *h;
+    creq->callback.tag = tag;
 
     int prio = 0;
     model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
