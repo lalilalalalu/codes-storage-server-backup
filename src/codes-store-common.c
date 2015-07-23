@@ -9,18 +9,17 @@
 
 #include <codes/codes-store-common.h>
 
-char const * const CODES_STORE_LP_NAME = "codes-store";
+/* change this once we do the big name change of '03 */
+char const * const CODES_STORE_LP_NAME = "rosd";
 
 void codes_store_init_req(
         enum codes_store_req_type type,
-        int dest_rel_id,
         uint64_t oid,
         uint64_t xfer_offset,
         uint64_t xfer_size,
         struct codes_store_request *req)
 {
     req->type = type;
-    req->dest_rel_id = dest_rel_id;
     req->oid = oid;
     req->xfer_offset = xfer_offset;
     req->xfer_size = xfer_size;

@@ -12,7 +12,7 @@
 #include <codes/codes_mapping.h>
 #include <codes/jenkins-hash.h>
 
-#include "../src/util/msg.h"
+#include "../codes/codes-store-lp.h"
 
 #define CLIENT_LP_NM "test-client"
 
@@ -30,12 +30,14 @@ struct test_client_state
 {
     int num_complete_wr;
     int num_complete_rd;
+    struct codes_cb_info cb;
 };
 
 struct test_client_msg
 {
     msg_header h;
-    triton_io_gresp g;
+    int tag;
+    int ret;
 };
 
 static void next(
@@ -44,23 +46,17 @@ static void next(
         struct test_client_msg * m,
         tw_lp * lp)
 {
-    triton_io_greq r;
+    struct codes_store_request r;
+    msg_header h;
+
     int n = is_write ? ns->num_complete_wr : ns->num_complete_rd;
 
-    r.req.req_type = is_write ? REQ_WRITE : REQ_READ;
-    r.req.create = 0;
-    r.req.oid = 0;
-    r.req.xfer_offset = n * req_size;
-    r.req.xfer_size = req_size;
+    codes_store_init_req(
+            is_write ? CSREQ_WRITE : CSREQ_READ, 0, n*req_size, req_size, &r);
 
-    msg_set_header(test_client_magic, TEST_CLI_ACK, lp->gid,
-            &r.callback.header);
-    r.callback.op_index = 0;
-    r.callback.event_size = sizeof(struct test_client_msg);
-    r.callback.header_offset = offsetof(struct test_client_msg, h);
-    r.callback.resp_offset   = offsetof(struct test_client_msg, g);
+    msg_set_header(test_client_magic, TEST_CLI_ACK, lp->gid, &h);
 
-    triton_send_request(&r, lp, cli_mn_id);
+    codes_store_send_req(&r, 0, lp, cli_mn_id, 0, &h, &ns->cb);
 
     printf("%lu: sent %s request\n", lp->gid, is_write ? "write" : "read");
 }
@@ -70,7 +66,7 @@ static void next_rc(
         struct test_client_msg *m,
         tw_lp *lp)
 {
-    triton_send_request_rev(req_size, lp, cli_mn_id);
+    codes_store_send_req_rc(cli_mn_id, lp);
     printf("%lu: sent %s request (rc)\n", lp->gid, is_write ? "write" : "read");
 }
 
@@ -133,6 +129,7 @@ static void test_client_init(
 {
     ns->num_complete_wr = 0;
     ns->num_complete_rd = 0;
+    INIT_CODES_CB_INFO(&ns->cb, struct test_client_msg, h, tag, ret);
 }
 
 static void test_client_pre_run(
@@ -173,6 +170,7 @@ void test_client_configure(int model_net_id){
 
     bj_hashlittle2(CLIENT_LP_NM, strlen(CLIENT_LP_NM), &h1, &h2);
     test_client_magic = h1+h2;
+    cli_mn_id = model_net_id;
 
     int rc;
     rc = configuration_get_value_int(&config, "test-client", "num_reqs", NULL,

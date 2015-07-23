@@ -6,18 +6,19 @@
 
 #include <string.h>
 #include <assert.h>
-#include "codes/model-net.h"
-#include "codes/codes_mapping.h"
-#include "codes/lp-type-lookup.h"
-#include "codes/jenkins-hash.h"
-#include "codes/codes.h"
-#include "codes/lp-io.h"
-#include "codes/local-storage-model.h"
-#include "codes/model-net-sched.h"
-#include "codes/rc-stack.h"
+#include <codes/model-net.h>
+#include <codes/codes_mapping.h>
+#include <codes/lp-type-lookup.h>
+#include <codes/jenkins-hash.h>
+#include <codes/codes.h>
+#include <codes/lp-io.h>
+#include <codes/local-storage-model.h>
+#include <codes/model-net-sched.h>
+#include <codes/rc-stack.h>
+#include <codes/codes-callback.h>
+
 #include "rosd.h"
 #include "rosd-creq.h"
-#include "../util/msg.h"
 #include "../util/map_util.h"
 
 /// danger: debug messages will produce a LOT of output, even for small runs
@@ -178,6 +179,39 @@ void rosd_configure(int model_net_id){
 
 ///// BEGIN LP, EVENT PROCESSING FUNCTION DEFS /////
 
+// just putting these here for now, will move later...
+void codes_store_send_resp(
+        int rc,
+        struct codes_cb_params const * p,
+        tw_lp *lp)
+{
+    // i'm a terrible person for using VLAs and everyone should know it
+    char data[p->info.event_size];
+
+    tw_lpid cli_lp = p->h.src;
+
+    msg_header *h = (msg_header*)(data + p->info.header_offset);
+    *h = p->h;
+    h->src = lp->gid;
+
+    int *tag = (int*)(data + p->info.tag_offset);
+    *tag = p->tag;
+
+    int *cli_rc  = (int*)(data + p->info.cb_ret_offset);
+    *cli_rc = rc;
+
+    int prio = 0;
+    model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
+            (void*) &prio);
+    model_net_event(mn_id, "rosd", cli_lp, ROSD_REQ_CONTROL_SZ, 0.0,
+            p->info.event_size, data, 0, NULL, lp);
+}
+
+void codes_store_send_resp_rc(tw_lp *lp)
+{
+    model_net_event_rc(mn_id, lp, ROSD_REQ_CONTROL_SZ);
+}
+
 
 void triton_rosd_init(triton_rosd_state *ns, tw_lp *lp) {
     ns->server_index = get_rosd_index(lp->gid);
@@ -277,7 +311,7 @@ void triton_rosd_finalize(triton_rosd_state *ns, tw_lp *lp) {
         rosd_qitem *qi = qlist_entry(ent, rosd_qitem, ql);
         fprintf(stderr, "WARNING: LP %lu with incomplete qitem "
                 "(cli lp %lu, op id %d)\n",
-                lp->gid, qi->cli_lp, qi->op_id);
+                lp->gid, qi->cli_cb.h.src, qi->op_id);
     }
     int written = 0;
     if (ns->server_index == 0){
@@ -351,7 +385,6 @@ void handle_recv_io_req(
     rosd_qitem *qi = malloc(sizeof(rosd_qitem)); 
     qi->op_id = ns->op_idx_pl++;
     qi->req = m->u.creq.req;
-    qi->cli_lp = m->h.src;
     qi->cli_cb = m->u.creq.callback;
     qi->preq = NULL;
     qlist_add_tail(&qi->ql, &ns->pending_ops);
@@ -359,20 +392,23 @@ void handle_recv_io_req(
     // save op id for rc
     m->u.creq.rc.op_id = qi->op_id;
 
-    lprintf("%lu: new req id:%d from %lu\n", lp->gid, qi->op_id, qi->cli_lp);
+    lprintf("%lu: new req id:%d from %lu\n", lp->gid, qi->op_id,
+            m->h.src);
 
     /* metadata op - avoid the pipelining events */
-    if (m->u.creq.req.req_type == REQ_OPEN) {
+    if (m->u.creq.req.type == CSREQ_OPEN
+            || m->u.creq.req.type == CSREQ_CREATE) {
         tw_event *e_local;
         triton_rosd_msg *m_local;
         rosd_callback_id cb_id;
+        int is_create = m->u.creq.req.type == CSREQ_CREATE;
 
         cb_id.op_id = qi->op_id;
         cb_id.tid = -1;
 
         /* in both cases, send the local disk op */
         e_local = lsm_event_new("rosd", lp->gid, qi->req.oid, 0, 0,
-                (qi->req.create) ? LSM_WRITE_REQUEST : LSM_READ_REQUEST,
+                is_create ? LSM_WRITE_REQUEST : LSM_READ_REQUEST,
                 sizeof(*m_local), lp, 0.0);
         m_local = lsm_event_data(e_local);
         msg_set_header(rosd_magic, COMPLETE_DISK_OP, lp->gid, &m_local->h);
@@ -382,7 +418,7 @@ void handle_recv_io_req(
     }
     else {
         qi->preq = rosd_pipeline_init(num_threads, pipeline_unit_size,
-                &m->u.creq.req, &m->u.creq.callback);
+                qi->req.xfer_size);
 
         // send the initial allocation event 
         pipeline_alloc_event(b, lp, qi->op_id, qi->preq);
@@ -453,22 +489,22 @@ void handle_pipeline_alloc_callback(
                 sz);
         p->rem -= sz;
 
-        if (qi->req.req_type == REQ_WRITE) {
+        if (qi->req.type == CSREQ_WRITE) {
             // create network ack callback
             triton_rosd_msg m_recv;
             // note: in the header, we actually want the src LP to be the
             // client LP rather than our own
-            msg_set_header(rosd_magic, RECV_CHUNK, qi->cli_lp, &m_recv.h);
+            msg_set_header(rosd_magic, RECV_CHUNK, qi->cli_cb.h.src, &m_recv.h);
             m_recv.u.recv_chunk.id.op_id = qi->op_id;
             m_recv.u.recv_chunk.id.tid = tid;
             // issue "pull" of data from client
             int prio = 0;
             model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
                     (void*) &prio);
-            model_net_pull_event(mn_id, "rosd", qi->cli_lp,
+            model_net_pull_event(mn_id, "rosd", qi->cli_cb.h.src,
                     sz, 0.0, sizeof(triton_rosd_msg), &m_recv, lp);
         }
-        else if (qi->req.req_type == REQ_READ) {
+        else if (qi->req.type == CSREQ_READ) {
             // direct read
             tw_event *e = lsm_event_new(
                     ROSD_LP_NM,
@@ -542,7 +578,7 @@ void handle_pipeline_alloc_callback(
             // completely finished with request, deq it
             qlist_del(&qi->ql);
             // add to statistics
-            if (qi->req.req_type == REQ_WRITE) {
+            if (qi->req.type == CSREQ_WRITE) {
                 ns->bytes_written_local += p->committed;
             }
             else {
@@ -601,8 +637,9 @@ void handle_recv_chunk(
 
     // issue asynchronous write, computing offset based on which chunk we're
     // using
-    lprintf("%lu: writing chunk %d (cli %lu, op %lu) (oid:%lu, off:%lu, len:%lu)\n",
-            lp->gid, t->chunk_id, qi->cli_lp, qi->cli_cb.op_index, p->req.oid,
+    lprintf("%lu: writing chunk %d (cli %lu, tag %d) (oid:%lu, off:%lu, len:%lu)\n",
+            lp->gid, t->chunk_id,
+            qi->cli_cb.h.src, qi->cli_cb.tag, qi->req.oid,
             p->punit_size * t->chunk_id + qi->req.xfer_offset,
             t->chunk_size);
     tw_event *e_store = lsm_event_new(
@@ -656,8 +693,7 @@ static void handle_complete_disk_op(
     }
 
     if (!m->u.complete_sto.is_data_op) {
-        triton_send_response(&qi->cli_cb, &qi->req, lp, mn_id,
-                ROSD_REQ_CONTROL_SZ, 0);
+        codes_store_send_resp(0, &qi->cli_cb, lp);
         qlist_del(&qi->ql);
         rc_stack_push(lp, qi, free_qitem, ns->finished_ops);
         b->c1 = 1;
@@ -674,13 +710,15 @@ static void handle_complete_disk_op(
         m->u.complete_sto.rc.chunk_id = t->chunk_id;
         m->u.complete_sto.rc.chunk_size = t->chunk_size;
 
-        if (qi->req.req_type == REQ_READ){
+        tw_lpid cli_lp = qi->cli_cb.h.src;
+
+        if (qi->req.type == CSREQ_READ){
             /* send to client without a remote message and with a local "chunk
              * done" message */
             triton_rosd_msg m_loc;
             msg_set_header(rosd_magic, COMPLETE_CHUNK_SEND, lp->gid, &m_loc.h);
             m_loc.u.complete_chunk_send.id = *id;
-            model_net_event(mn_id, "rosd", qi->cli_lp, t->chunk_size, 0.0,
+            model_net_event(mn_id, "rosd", cli_lp, t->chunk_size, 0.0,
                     0, NULL, sizeof(m_loc), &m_loc, lp);
         }
         else {
@@ -691,8 +729,7 @@ static void handle_complete_disk_op(
             // first to see all committed data acks the client
             if (p->committed == qi->req.xfer_size) {
                 b->c0 = 1;
-                triton_send_response(&qi->cli_cb, &qi->req, lp,
-                        mn_id, ROSD_REQ_CONTROL_SZ, 0);
+                codes_store_send_resp(0, &qi->cli_cb, lp);
             }
 
             // no more work to do
@@ -743,15 +780,15 @@ static void handle_complete_disk_op(
 
                 // setup, send message
                 triton_rosd_msg m_recv;
-                msg_set_header(rosd_magic, RECV_CHUNK, qi->cli_lp, &m_recv.h);
+                msg_set_header(rosd_magic, RECV_CHUNK, cli_lp, &m_recv.h);
                 m_recv.u.recv_chunk.id = *id;
                 // control message gets high priority
                 int prio = 0;
                 model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
                         (void*) &prio);
-                model_net_pull_event(mn_id, "rosd", qi->cli_lp, chunk_sz,
+                model_net_pull_event(mn_id, "rosd", cli_lp, chunk_sz,
                         0.0, sizeof(triton_rosd_msg), &m_recv, lp);
-                lprintf("%lu: pull req to %lu\n", lp->gid, qi->cli_lp);
+                lprintf("%lu: pull req to %lu\n", lp->gid, cli_lp);
             }
         }
     }
@@ -812,8 +849,7 @@ void handle_complete_chunk_send(
         // if we are the last thread to send data to the client then ack
         if (p->forwarded == qi->req.xfer_size) {
             b->c2 = 1;
-            triton_send_response(&qi->cli_cb, &qi->req, lp,
-                    mn_id, ROSD_REQ_CONTROL_SZ, 0);
+            codes_store_send_resp(0, &qi->cli_cb, lp);
         }
         // if we are the last thread then cleanup req and ack to client
         if (p->nthreads_fin == p->nthreads) {
@@ -891,9 +927,10 @@ void handle_recv_io_req_rc(
     }
     assert(qitem_ent != &ns->pending_ops);
 
-    lprintf("%lu: new req rc id:%d from %lu\n", lp->gid, qi->op_id, qi->cli_lp);
+    lprintf("%lu: new req rc id:%d from %lu\n", lp->gid, qi->op_id,
+            qi->cli_cb.h.src);
 
-    if (m->u.creq.req.req_type == REQ_OPEN) {
+    if (m->u.creq.req.type == CSREQ_OPEN) {
         lsm_event_new_reverse(lp);
         return;
     }
@@ -925,7 +962,7 @@ void handle_pipeline_alloc_callback_rc(
         // add back into the queue
         qlist_add_tail(&qi->ql, &ns->pending_ops);
         // undo the stats
-        if (qi->req.req_type == REQ_WRITE) {
+        if (qi->req.type == CSREQ_WRITE) {
             ns->bytes_written_local -= qi->preq->committed;
         }
         else {
@@ -956,9 +993,9 @@ void handle_pipeline_alloc_callback_rc(
         p->threads[tid].chunk_size = 0;
         p->threads[tid].chunk_id = -1;
 
-        if (qi->req.req_type == REQ_WRITE)
+        if (qi->req.type == CSREQ_WRITE)
             model_net_pull_event_rc(mn_id, lp);
-        else if (qi->req.req_type == REQ_READ)
+        else if (qi->req.type == CSREQ_READ)
             lsm_event_new_reverse(lp);
         else { assert(0); }
 
@@ -1046,7 +1083,7 @@ static void handle_complete_disk_op_rc(
     }
 
     if (!m->u.complete_sto.is_data_op) {
-        triton_send_response_rev(lp, mn_id, ROSD_REQ_CONTROL_SZ);
+        codes_store_send_resp_rc(lp);
     }
     else {
         rosd_pipelined_req *p = qi->preq;
@@ -1066,13 +1103,13 @@ static void handle_complete_disk_op_rc(
                 p->committed, prev_chunk_size);
         p->committed -= prev_chunk_size;
 
-        if (qi->req.req_type == REQ_READ){
+        if (qi->req.type == CSREQ_READ){
             model_net_event_rc(mn_id, lp, prev_chunk_size);
         }
         // else write && chunk op is complete
         else {
             if (b->c0){
-                triton_send_response_rev(lp, mn_id, ROSD_REQ_CONTROL_SZ);
+                codes_store_send_resp_rc(lp);
             }
             // thread pulled more data
             if (b->c2){
@@ -1145,7 +1182,7 @@ void handle_complete_chunk_send_rc(
         p->nthreads_fin--;
         resource_lp_free_rc(lp);
         if (b->c2)
-            triton_send_response_rev(lp, mn_id, ROSD_REQ_CONTROL_SZ);
+            codes_store_send_resp_rc(lp);
     }
     else {
         p->rem += t->chunk_size;

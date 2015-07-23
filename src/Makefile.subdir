@@ -2,13 +2,10 @@ lib_LIBRARIES += src/libcodes-storage-server.a
 
 src_libcodes_storage_server_a_SOURCES = \
 	src/codes-store-common.c \
-	src/client/codes-store-cli.c \
 	src/server/codes-store-lp.c \
 	src/server/rosd-creq.c \
 	src/server/rosd-creq.h \
 	src/server/rosd.c \
 	src/server/rosd.h \
 	src/util/map_util.c \
-	src/util/map_util.h \
-	src/util/msg.c \
-	src/util/msg.h
+	src/util/map_util.h

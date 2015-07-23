@@ -7,7 +7,6 @@
 #ifndef ROSD_CREQ_H
 #define ROSD_CREQ_H
 
-#include "../util/msg.h"
 #include "codes/lp-msg.h"
 
 typedef struct rosd_pipelined_req rosd_pipelined_req;
@@ -50,8 +49,7 @@ struct rosd_pipelined_thread {
 rosd_pipelined_req* rosd_pipeline_init(
         int nthreads, 
         uint64_t punit_size_max,
-        request_params *req,
-        triton_cli_callback *callback);
+        uint64_t req_size);
 
 void rosd_pipeline_destroy(rosd_pipelined_req *req);
 

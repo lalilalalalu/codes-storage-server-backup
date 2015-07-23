@@ -5,15 +5,14 @@
  */
 
 #include "rosd-creq.h"
-#include "../util/msg.h"
 #include <stdlib.h>
 #include <assert.h>
 
 rosd_pipelined_req* rosd_pipeline_init(
-        int nthreads, 
+        int nthreads,
         uint64_t punit_size_max,
-        request_params *req,
-        triton_cli_callback *callback) {
+        uint64_t req_size)
+{
     rosd_pipelined_req *r;
     if (nthreads <= 0){
         return NULL;
@@ -32,7 +31,7 @@ rosd_pipelined_req* rosd_pipeline_init(
 
     r->punit_size = punit_size_max;
 
-    r->rem = req->xfer_size;
+    r->rem = req_size;
     r->received = 0;
     r->committed = 0;
     r->forwarded = 0;

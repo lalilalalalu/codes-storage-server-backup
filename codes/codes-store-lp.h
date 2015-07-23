@@ -14,14 +14,17 @@
 
 void codes_store_send_req(
         struct codes_store_request const * r,
-        int model_net_id,
+        int dest_id,
         tw_lp * sender,
+        int model_net_id,
         int tag,
-        msg_header const * m,
+        msg_header const * h,
         struct codes_cb_info const * cb);
 
-void codes_store_send_req_rc(tw_lp * sender);
+void codes_store_send_req_rc(int model_net_id, tw_lp * sender);
 
+void codes_store_register();
+void codes_store_configure(int model_net_id);
 
 #endif /* end of include guard: CODES_STORE_CLI_H */
 

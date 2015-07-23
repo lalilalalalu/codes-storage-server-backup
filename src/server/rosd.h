@@ -8,9 +8,10 @@
 #define ROSD_H
 
 #include <ross.h>    
+#include <codes/codes-store-common.h>
+#include <codes/codes-callback.h>
 #include "codes/lp-io.h"
 #include "codes/quicklist.h"
-#include "../util/msg.h"
 #include "codes/lp-msg.h"
 #include "codes/resource-lp.h"
 #include "rosd-creq.h"
@@ -63,8 +64,8 @@ struct triton_rosd_msg {
 
     union {
         struct {
-            request_params req;
-            triton_cli_callback callback;
+            struct codes_store_request req;
+            struct codes_cb_params callback;
             struct {
                 int op_id; // needed to map to created op id
             } rc;
@@ -105,9 +106,8 @@ struct triton_rosd_msg {
 struct rosd_qitem {
     // my op id
     int op_id;
-    request_params req;
-    tw_lpid cli_lp;
-    triton_cli_callback cli_cb;  // for client-server reqs
+    struct codes_store_request req;
+    struct codes_cb_params cli_cb;
     rosd_pipelined_req *preq;
     struct qlist_head ql;
 };
@@ -143,6 +143,13 @@ struct triton_rosd_state {
 void rosd_register();
 // configures the lp given the global config object
 void rosd_configure(int model_net_id);
+
+// just putting these here for now, will move later...
+void codes_store_send_resp(
+        int rc,
+        struct codes_cb_params const * p,
+        tw_lp *lp);
+void codes_store_send_resp_rc(tw_lp *lp);
 
 #endif
 
