@@ -7,8 +7,8 @@
 #ifndef ROSD_H
 #define ROSD_H
 
-#include <ross.h>    
-#include <codes/codes-store-common.h>
+#include <ross.h>
+#include <codes/codes-store-lp.h>
 #include <codes/codes-callback.h>
 #include "codes/lp-io.h"
 #include "codes/quicklist.h"
