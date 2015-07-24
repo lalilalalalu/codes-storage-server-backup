@@ -4,8 +4,8 @@
  *
  */
 
-#ifndef CODES_STORE_CLI_H
-#define CODES_STORE_CLI_H
+#ifndef CODES_STORE_LP_H
+#define CODES_STORE_LP_H
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -78,7 +78,7 @@ void codes_store_register();
 
 void codes_store_configure(int model_net_id);
 
-#endif /* end of include guard: CODES_STORE_CLI_H */
+#endif /* end of include guard: CODES_STORE_LP_H */
 
 /*
  * Local variables:
