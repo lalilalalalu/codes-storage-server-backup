@@ -29,6 +29,7 @@ enum codes_store_req_type {
 
 struct codes_store_request {
     enum codes_store_req_type type;
+    int prio;
     uint64_t oid;
     uint64_t xfer_offset;
     uint64_t xfer_size;
@@ -44,6 +45,7 @@ typedef enum codes_store_ret codes_store_ret_t;
 // param init sugar
 void codes_store_init_req(
         enum codes_store_req_type type,
+        int priority,
         uint64_t oid,
         uint64_t xfer_offset,
         uint64_t xfer_size,

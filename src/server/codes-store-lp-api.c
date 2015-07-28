@@ -19,12 +19,14 @@ char const * const CODES_STORE_LP_NAME = "codes-store";
 
 void codes_store_init_req(
         enum codes_store_req_type type,
+        int priority,
         uint64_t oid,
         uint64_t xfer_offset,
         uint64_t xfer_size,
         struct codes_store_request *req)
 {
     req->type = type;
+    req->prio = priority;
     req->oid = oid;
     req->xfer_offset = xfer_offset;
     req->xfer_size = xfer_size;

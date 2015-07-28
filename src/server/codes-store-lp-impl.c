@@ -385,6 +385,7 @@ void handle_recv_cli_req(
         cb_id.tid = -1;
 
         /* in both cases, send the local disk op */
+        lsm_set_event_priority(qi->req.prio);
         e_local = lsm_event_new(CODES_STORE_LP_NAME, lp->gid, qi->req.oid, 0, 0,
                 is_create ? LSM_WRITE_REQUEST : LSM_READ_REQUEST,
                 sizeof(*m_local), lp, 0.0);
@@ -488,6 +489,7 @@ void handle_palloc_callback(
         }
         else if (qi->req.type == CSREQ_READ) {
             // direct read
+            lsm_set_event_priority(qi->req.prio);
             tw_event *e = lsm_event_new(
                     CODES_STORE_LP_NAME,
                     lp->gid,
@@ -626,6 +628,7 @@ void handle_recv_chunk(
             qi->cli_cb.h.src, qi->cli_cb.tag, qi->req.oid,
             p->punit_size * t->chunk_id + qi->req.xfer_offset,
             t->chunk_size);
+    lsm_set_event_priority(qi->req.prio);
     tw_event *e_store = lsm_event_new(
             CODES_STORE_LP_NAME,
             lp->gid,
@@ -867,6 +870,7 @@ void handle_complete_chunk_send(
         p->rem -= chunk_sz;
 
         // do a read
+        lsm_set_event_priority(qi->req.prio);
         tw_event *e = lsm_event_new(
                 CODES_STORE_LP_NAME,
                 lp->gid,

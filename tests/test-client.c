@@ -57,7 +57,7 @@ static void next(
     int n = is_write ? ns->num_complete_wr : ns->num_complete_rd;
 
     codes_store_init_req(
-            is_write ? CSREQ_WRITE : CSREQ_READ, 0, n*req_size, req_size, &r);
+            is_write? CSREQ_WRITE:CSREQ_READ, 0, 0, n*req_size, req_size, &r);
 
     msg_set_header(test_client_magic, TEST_CLI_ACK, lp->gid, &h);
 
