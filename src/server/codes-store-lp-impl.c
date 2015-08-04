@@ -24,7 +24,7 @@
 /// and especially in optimistic runs
 
 // thread specific debug messages (producing a finer-grain log)
-#define CS_THREAD_DBG 0
+#define CS_THREAD_DBG 1
 #define tprintf(_fmt, ...) \
     do {if (CS_THREAD_DBG) printf(_fmt, __VA_ARGS__);} while (0)
 
@@ -43,6 +43,8 @@ static int mn_id;
 /* system parameters */
 static int num_threads = 4;
 static int pipeline_unit_size = (1<<22);
+static int memory_size = (1<<12);
+static int storage_size = (1<<12);
 
 struct cs_state {
     // my logical (not lp) id
@@ -67,6 +69,10 @@ struct cs_state {
 
     // scratch output buffer (for lpio)
     char output_buf[256];
+
+    // cache the resource tokens
+    resource_token_t mem_tok;
+    resource_token_t st_tok;
 };
 
 typedef struct cs_state cs_state;
@@ -106,6 +112,7 @@ static void cs_event_handler_rc(
         cs_msg * m,
         tw_lp * lp);
 static void cs_finalize(cs_state *ns, tw_lp *lp);
+static void cs_pre_run(cs_state * ns, tw_lp * lp);
 
 // event handlers
 #define X(a,bb,c) \
@@ -134,7 +141,7 @@ CS_EVENTS
 
 tw_lptype cs_lp = {
     (init_f) cs_init,
-    (pre_run_f) NULL,
+    (pre_run_f) cs_pre_run,
     (event_f) cs_event_handler,
     (revent_f) cs_event_handler_rc,
     (final_f) cs_finalize,
@@ -153,6 +160,7 @@ void codes_store_register()
 
 void codes_store_configure(int model_net_id){
     uint32_t h1=0, h2=0;
+    long int avail;
 
     bj_hashlittle2(CODES_STORE_LP_NAME, strlen(CODES_STORE_LP_NAME), &h1, &h2);
     cs_magic = h1+h2;
@@ -162,13 +170,48 @@ void codes_store_configure(int model_net_id){
     // get the number of threads and the pipeline buffer size
     // if not available, no problem - use a default of 4 threads, 4MB per
     // thread
+    int ret = configuration_get_value_longint(&config, RESOURCE_LP_NM,
+            "available", NULL, &avail);
+    if (ret){
+            fprintf(stderr,
+                    "Could not find section:resource value:available for "
+                    "resource LP\n");
+            exit(1);
+    }
+    assert(avail > 0);
     configuration_get_value_int(&config, CODES_STORE_LP_NAME,
             "req_threads", NULL, &num_threads);
     configuration_get_value_int(&config, CODES_STORE_LP_NAME,
             "thread_buf_sz", NULL, &pipeline_unit_size);
-    assert(num_threads > 0 && pipeline_unit_size > 0);
+    configuration_get_value_int(&config, CODES_STORE_LP_NAME,
+            "memory_size", NULL, &memory_size);
+    configuration_get_value_int(&config, CODES_STORE_LP_NAME,
+            "storage_size", NULL, &storage_size);
 
+    assert(num_threads > 0 
+           && pipeline_unit_size > 0
+           && storage_size > 0
+           && memory_size > 0);
+
+   assert(memory_size + storage_size == avail);
     /* done!!! */
+}
+
+/*pre-run function calls */
+static void cs_pre_run(cs_state * ns, tw_lp * lp)
+{
+    int is_mem = 0; 
+    msg_header h;
+    
+    /* Now reserve the storage */
+    msg_set_header(cs_magic, CS_STORAGE_INIT_CALLBACK, lp->gid, &h); 
+    
+    resource_lp_reserve(&h, storage_size, 1, sizeof(cs_msg),
+            offsetof(cs_msg, h),
+            offsetof(cs_msg, u.storage_init_callback.cb),
+            sizeof(resource_callback_id),
+            offsetof(cs_msg, u.storage_init_callback.rs), &is_mem, lp);
+   
 }
 
 ///// BEGIN LP, EVENT PROCESSING FUNCTION DEFS /////
@@ -282,6 +325,7 @@ void cs_event_handler_rc(
 void cs_finalize(cs_state *ns, tw_lp *lp) {
     rc_stack_destroy(ns->finished_ops);
 
+
     // check for pending operations that did not complete or were not removed
     struct qlist_head *ent;
     qlist_for_each(ent, &ns->pending_ops){
@@ -319,7 +363,8 @@ static void pipeline_alloc_event(
         tw_bf *b,
         tw_lp *lp,
         int op_id,
-        cs_pipelined_req *req){
+        cs_pipelined_req *req,
+        resource_token_t mem_tok){
 
     assert(req->rem > 0);
     assert(req->nthreads_init < req->nthreads);
@@ -345,7 +390,7 @@ static void pipeline_alloc_event(
 
     // note - this is a "blocking" call - we won't get the callback until
     // allocation succeeded
-    resource_lp_get(&h, sz, 1, sizeof(cs_msg),
+    resource_lp_get_reserved(&h, sz, mem_tok, 1, sizeof(cs_msg),
             offsetof(cs_msg, h),
             offsetof(cs_msg, u.palloc_callback.cb),
             sizeof(cs_callback_id),
@@ -402,10 +447,139 @@ void handle_recv_cli_req(
                 qi->req.xfer_size);
 
         // send the initial allocation event
-        pipeline_alloc_event(b, lp, qi->op_id, qi->preq);
+        pipeline_alloc_event(b, lp, qi->op_id, qi->preq, ns->mem_tok);
     }
 }
 
+void handle_memory_callback_rc(
+        cs_state * ns,
+        tw_bf *b,
+        msg_header const * h_m,
+        struct ev_memory_callback * m,
+        tw_lp * lp)
+{
+
+}
+
+void handle_memory_callback(
+        cs_state * ns,
+        tw_bf *b,
+        msg_header const * h_m,
+        struct ev_memory_callback * m,
+        tw_lp * lp)
+{
+    /* if reservation has failed then we cannot continue*/
+    assert(!m->cb.ret);
+    
+    /* Assuming that the reservation was successful, we will
+       now reserve the memory */
+    ns->mem_tok = m->cb.tok;
+}
+
+void handle_storage_init_callback_rc(
+        cs_state * ns, 
+        tw_bf * b,
+        msg_header const * h, 
+        struct ev_storage_init_callback * m, 
+        tw_lp * lp)
+{
+    /* reverse handler */
+    resource_lp_reserve_rc(lp);
+}
+
+void handle_storage_init_callback(
+        cs_state * ns,
+        tw_bf *b,
+        msg_header const * h_m,
+        struct ev_storage_init_callback * m,
+        tw_lp * lp)
+{
+
+    /* if reservation has failed then we cannot continue*/
+    assert(!m->cb.ret);
+    
+    /* Assuming that the reservation was successful, we will
+       now reserve the memory */
+   ns->st_tok = m->cb.tok;
+
+   /* Now do a reservation of the memory */
+    int is_mem = 1;
+    msg_header h;
+    msg_set_header(cs_magic, CS_MEMORY_ALLOC_CALLBACK, lp->gid, &h); 
+    
+    resource_lp_reserve(&h, memory_size, 1, sizeof(cs_msg),
+            offsetof(cs_msg, h),
+            offsetof(cs_msg, u.memory_callback.cb),
+            sizeof(resource_callback_id),
+            offsetof(cs_msg, u.memory_callback.rs), &is_mem, lp);
+}
+
+void handle_storage_alloc_callback_rc(
+        cs_state * ns,
+        tw_bf *b,
+        msg_header const * h_m,
+        struct ev_storage_alloc_callback * m,
+        tw_lp * lp)
+{
+    model_net_pull_event_rc(mn_id, lp);
+}
+
+void handle_storage_alloc_callback(
+        cs_state * ns,
+        tw_bf *b,
+        msg_header const * h_m,
+        struct ev_storage_alloc_callback * m,
+        tw_lp * lp)
+{
+      /* TODO: Right behavior when burst buffer is full? */
+      assert(!m->cb.ret);
+      // first look up pipeline request
+      struct qlist_head *ent = NULL;
+      cs_qitem *qi = NULL;
+      qlist_for_each(ent, &ns->pending_ops){
+          qi = qlist_entry(ent, cs_qitem, ql);
+          if (qi->op_id == m->id.op_id){
+            break;
+         }
+     }
+      if (ent == &ns->pending_ops){
+          int written = sprintf(ns->output_buf,
+                "ERROR: pipeline op with id %d not found (chunk recv)",
+                m->id.op_id);
+          lp_io_write(lp->gid, "errors", written, ns->output_buf);
+          ns->error_ct = 1;
+          return;
+      }
+      int tid = m->id.tid;
+      cs_pipelined_req *p = qi->preq;
+      cs_pipelined_thread *t = &p->threads[tid];
+      // RC bug - allocation was reversed locally, then we got a response from the
+      // client RDMA
+      if (t->chunk_id == -1 || t->chunk_size == 0){
+          int written = sprintf(ns->output_buf,
+                "ERROR: %lu,%d: thread %d was reset and not reinitialized "
+                "(id:%d sz:%lu)\n",
+                lp->gid, qi->op_id, tid, t->chunk_id, t->chunk_size);
+          lp_io_write(lp->gid, "errors", written, ns->output_buf);
+          ns->error_ct = 1;
+          return;
+      }
+    // create network ack callback
+      cs_msg m_recv;
+    // note: in the header, we actually want the src LP to be the
+   // client LP rather than our own
+      msg_set_header(cs_magic, CS_RECV_CHUNK, h_m->src, &m_recv.h);
+      GETEV(recv, &m_recv, recv_chunk);
+      recv->id.op_id = m->id.op_id;
+      recv->id.tid = tid;
+
+   // issue "pull" of data from client
+      int prio = 0;
+      model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
+                    (void*) &prio);
+      model_net_pull_event(mn_id, CODES_STORE_LP_NAME, qi->cli_cb.h.src,
+                    t->chunk_size, 0.0, sizeof(cs_msg), &m_recv, lp);
+}
 // bitfields used:
 // c0 - there was data to pull post- thread allocation
 // c1 - assuming  c0, thread is last to alloc due to no remaining data after
@@ -472,20 +646,22 @@ void handle_palloc_callback(
         p->rem -= sz;
 
         if (qi->req.type == CSREQ_WRITE) {
-            // create network ack callback
-            cs_msg m_recv;
-            // note: in the header, we actually want the src LP to be the
-            // client LP rather than our own
-            msg_set_header(cs_magic, CS_RECV_CHUNK, qi->cli_cb.h.src, &m_recv.h);
-            GETEV(recv, &m_recv, recv_chunk);
-            recv->id.op_id = qi->op_id;
-            recv->id.tid = tid;
-            // issue "pull" of data from client
-            int prio = 0;
-            model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
-                    (void*) &prio);
-            model_net_pull_event(mn_id, CODES_STORE_LP_NAME, qi->cli_cb.h.src,
-                    sz, 0.0, sizeof(cs_msg), &m_recv, lp);
+	    tprintf("%lu,%d: thread %d writing chunk_id %d sz %lu to storage\n",
+		    lp->gid, qi->op_id, tid, chunk_id, sz);
+            cs_callback_id id;
+            id.op_id = qi->op_id;
+	    id.tid = tid;
+
+            /* First check if the requested amount of storage is available. */
+            msg_header h;
+	    msg_set_header(cs_magic, CS_STORAGE_ALLOC_CALLBACK, lp->gid, &h);
+
+	    resource_lp_get_reserved(&h, sz, ns->st_tok, 1, sizeof(cs_msg),
+            	offsetof(cs_msg, h),
+            	offsetof(cs_msg, u.storage_alloc_callback.cb),
+            	sizeof(cs_callback_id),
+            	offsetof(cs_msg, u.storage_alloc_callback.id), &id, lp);
+            
         }
         else if (qi->req.type == CSREQ_READ) {
             // direct read
@@ -528,14 +704,14 @@ void handle_palloc_callback(
         // more threads to allocate
         else if (p->nthreads_init < p->nthreads){
             b->c2 = 1;
-            pipeline_alloc_event(b, lp, m->id.op_id, p);
+            pipeline_alloc_event(b, lp, m->id.op_id, p, ns->mem_tok);
         }
         // else nothing to do
     }
     else{
         // de-allocate if all pending data scheduled for pulling before this
         // thread got the alloc
-        resource_lp_free(p->threads[tid].punit_size, lp);
+        resource_lp_free_reserved(p->threads[tid].punit_size, ns->mem_tok, lp);
 
         // NOTE: normally we'd kick off other allocation requests, but in this
         // case we're not. Hence, we need to set the thread counts up here as if
@@ -735,7 +911,7 @@ static void handle_complete_disk_op(
                         lp->gid, qi->op_id, id->tid, m, p->nthreads_init,
                         p->nthreads_alloc_waiting, p->nthreads_fin);
                 p->nthreads_fin++;
-                resource_lp_free(t->punit_size, lp);
+                resource_lp_free_reserved(t->punit_size, ns->mem_tok, lp);
                 // if we are the last thread then cleanup req
                 if (p->nthreads_fin == p->nthreads){
                     // just put onto queue, as reconstructing is just too
@@ -768,6 +944,7 @@ static void handle_complete_disk_op(
                         p->rem, chunk_sz);
                 p->rem -= chunk_sz;
 
+		
                 // setup, send message
                 cs_msg m_recv;
                 msg_set_header(cs_magic, CS_RECV_CHUNK, cli_lp, &m_recv.h);
@@ -837,7 +1014,7 @@ void handle_complete_chunk_send(
                 lp->gid, qi->op_id, id.tid, m, p->nthreads_init,
                 p->nthreads_alloc_waiting, p->nthreads_fin);
         p->nthreads_fin++;
-        resource_lp_free(t->punit_size, lp);
+        resource_lp_free_reserved(t->punit_size, ns->mem_tok, lp);
         // if we are the last thread to send data to the client then ack
         if (p->forwarded == qi->req.xfer_size) {
             b->c2 = 1;
@@ -898,7 +1075,7 @@ static void pipeline_alloc_event_rc(
         cs_pipelined_req *req){
     req->nthreads_alloc_waiting--;
     req->nthreads_init--;
-    resource_lp_get_rc(lp);
+    resource_lp_get_reserved_rc(lp);
 }
 
 void handle_recv_cli_req_rc(
@@ -990,7 +1167,7 @@ void handle_palloc_callback_rc(
         p->threads[tid].chunk_id = -1;
 
         if (qi->req.type == CSREQ_WRITE)
-            model_net_pull_event_rc(mn_id, lp);
+          resource_lp_get_reserved_rc(lp);
         else if (qi->req.type == CSREQ_READ)
             lsm_event_new_reverse(lp);
         else { assert(0); }
@@ -1009,7 +1186,7 @@ void handle_palloc_callback_rc(
         }
     }
     else{
-        resource_lp_free_rc(lp);
+        resource_lp_free_reserved_rc(lp);
         tprintf("%lu,%d: thread %d alloc'd after compl rc, "
                 "tid counts (%d-%d, %d+1, %d-%d)\n",
                 lp->gid, qi->op_id, tid, p->nthreads_init,

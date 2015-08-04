@@ -21,6 +21,9 @@ extern int cs_magic;
 #define CS_EVENTS \
     X(CS_RECV_CLI_REQ,            recv_cli_req, = 20) \
     X(CS_PIPELINE_ALLOC_CALLBACK, palloc_callback, ) \
+    X(CS_STORAGE_INIT_CALLBACK,   storage_init_callback, ) \
+    X(CS_STORAGE_ALLOC_CALLBACK,   storage_alloc_callback, ) \
+    X(CS_MEMORY_ALLOC_CALLBACK,   memory_callback, ) \
     X(CS_RECV_CHUNK,              recv_chunk, ) \
     X(CS_COMPLETE_DISK_OP,        complete_disk_op, ) \
     X(CS_COMPLETE_CHUNK_SEND,     complete_chunk_send, )
@@ -36,6 +39,11 @@ typedef struct cs_callback_id {
     int op_id; // pipelined op id
     int tid;   // thread id for particular event
 } cs_callback_id;
+
+typedef struct resource_callback_id
+{
+    int rs_type; /* type of resource, memory or storage */
+} resource_callback_id;
 
 // event structures
 struct ev_recv_cli_req {
@@ -56,10 +64,26 @@ struct ev_palloc_callback{
     } rc;
 };
 
+/* Only get the resource callback from the callee? */
+struct ev_memory_callback{
+    resource_callback cb;
+    resource_callback_id rs;
+};
+
+/* Only get the resource callback from the callee? */
+struct ev_storage_init_callback{
+    resource_callback cb;
+    resource_callback_id rs;
+};
+
 struct ev_recv_chunk {
     cs_callback_id id;
 };
 
+struct ev_storage_alloc_callback {
+   resource_callback cb;
+   cs_callback_id id;
+};
 struct ev_complete_disk_op {
     cs_callback_id id;
     // data vs. metadata req - controls which queue will be searched
