@@ -24,7 +24,7 @@
 /// and especially in optimistic runs
 
 // thread specific debug messages (producing a finer-grain log)
-#define CS_THREAD_DBG 1
+#define CS_THREAD_DBG 0
 #define tprintf(_fmt, ...) \
     do {if (CS_THREAD_DBG) printf(_fmt, __VA_ARGS__);} while (0)
 
