@@ -26,6 +26,7 @@ extern int cs_magic;
     X(CS_MEMORY_ALLOC_CALLBACK,   memory_callback, ) \
     X(CS_RECV_CHUNK,              recv_chunk, ) \
     X(CS_COMPLETE_DISK_OP,        complete_disk_op, ) \
+    X(CS_COMPLETE_DRAIN,          complete_drain, ) \
     X(CS_COMPLETE_CHUNK_SEND,     complete_chunk_send, )
 
 #define X(a,b,c) a,
@@ -82,6 +83,9 @@ struct ev_recv_chunk {
 
 struct ev_storage_alloc_callback {
    resource_callback cb;
+   cs_callback_id id;
+};
+struct ev_complete_drain {
    cs_callback_id id;
 };
 struct ev_complete_disk_op {

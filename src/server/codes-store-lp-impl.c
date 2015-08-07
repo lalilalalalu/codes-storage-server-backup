@@ -16,6 +16,8 @@
 #include <codes/rc-stack.h>
 #include <codes/codes-callback.h>
 #include <codes/quicklist.h>
+#include <codes/resource.h>
+#include <codes/codes-external-store.h>
 
 #include "codes-store-lp-internal.h"
 #include "codes-store-pipeline.h"
@@ -45,6 +47,7 @@ static int num_threads = 4;
 static int pipeline_unit_size = (1<<22);
 static int memory_size = (1<<12);
 static int storage_size = (1<<12);
+static int bb_threshold = (1<<5);
 
 struct cs_state {
     // my logical (not lp) id
@@ -63,6 +66,10 @@ struct cs_state {
     // - read locally
     unsigned long bytes_written_local;
     unsigned long bytes_read_local;
+
+    // maintain a memory bytes written counter which is reset
+    // every time data is drained to the ES LP
+    unsigned long bytes_st_for_drain;
 
     // number of errors we have encountered (for self-suspend)
     int error_ct;
@@ -187,11 +194,14 @@ void codes_store_configure(int model_net_id){
             "memory_size", NULL, &memory_size);
     configuration_get_value_int(&config, CODES_STORE_LP_NAME,
             "storage_size", NULL, &storage_size);
+    configuration_get_value_int(&config, CODES_STORE_LP_NAME,
+            "bb_threshold", NULL, &bb_threshold);
 
     assert(num_threads > 0 
            && pipeline_unit_size > 0
            && storage_size > 0
-           && memory_size > 0);
+           && memory_size > 0
+	   && bb_threshold > 0);
 
    assert(memory_size + storage_size == avail);
     /* done!!! */
@@ -390,6 +400,7 @@ static void pipeline_alloc_event(
 
     // note - this is a "blocking" call - we won't get the callback until
     // allocation succeeded
+    /* Check the available space of in resource LP and drain if threshold has reached */
     resource_lp_get_reserved(&h, sz, mem_tok, 1, sizeof(cs_msg),
             offsetof(cs_msg, h),
             offsetof(cs_msg, u.palloc_callback.cb),
@@ -741,7 +752,7 @@ void handle_palloc_callback(
             // add to statistics
             if (qi->req.type == CSREQ_WRITE) {
                 ns->bytes_written_local += p->committed;
-            }
+	     }
             else {
                 ns->bytes_read_local += p->committed;
             }
@@ -797,7 +808,7 @@ void handle_recv_chunk(
 
     p->received += t->chunk_size;
 
-    // issue asynchronous write, computing offset based on which chunk we're
+	    // issue asynchronous write, computing offset based on which chunk we're
     // using
     lprintf("%lu: writing chunk %d (cli %lu, tag %d) (oid:%lu, off:%lu, len:%lu)\n",
             lp->gid, t->chunk_id,
@@ -888,6 +899,20 @@ static void handle_complete_disk_op(
                     0.0, 0, NULL, sizeof(m_loc), &m_loc, lp);
         }
         else {
+	    // first check if the BB node needs to be drained 
+	    ns->bytes_st_for_drain += p->committed;
+	    if(ns->bytes_st_for_drain >= bb_threshold)
+	    {
+		   cs_callback_id cid;
+		   cid.op_id = qi->op_id;
+		   cid.tid = id->tid;	
+		   cs_msg m_loc;
+		   msg_set_header(cs_magic, CS_COMPLETE_DRAIN, lp->gid, &m_loc.h);
+		   GETEV(compl, &m_loc, complete_drain);
+		   compl->id = cid;
+		   codes_ex_store_send_req(CES_WRITE, ns->bytes_st_for_drain, &m_loc,
+					   sizeof(m_loc), lp);
+	   }
             // two cases to consider:
             // - thread can pull more work from src
             // - no more work to do, but there are pending chunks
@@ -962,6 +987,31 @@ static void handle_complete_disk_op(
     }
 }
 
+void handle_complete_drain_rc(
+        cs_state * ns,
+        tw_bf *b,
+        msg_header const * h,
+        struct ev_complete_drain * m,
+        tw_lp * lp) 
+{
+}
+
+void handle_complete_drain(
+        cs_state * ns,
+        tw_bf *b,
+        msg_header const * h,
+        struct ev_complete_drain * m,
+        tw_lp * lp) 
+{
+     // Reset the counter 
+     ns->bytes_st_for_drain = 0;
+
+     resource_lp_free_reserved(bb_threshold, ns->st_tok, lp);
+
+     tprintf("%lu,%d: thread %d finished draining"
+		" data %d bytes from BB\n",
+		lp->gid, m->id.op_id, m->id.tid, bb_threshold);
+}
 // bitfields used:
 // c0 - no more work to do
 // c1 - last running thread -> cleanup performed

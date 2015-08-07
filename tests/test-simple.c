@@ -13,6 +13,8 @@
 #include <codes/resource-lp.h>
 
 #include <codes/codes-store-lp.h>
+#include <codes/codes-external-store.h>
+
 #include "test-client.h"
 
 static tw_stime s_to_ns(tw_stime s)
@@ -64,7 +66,7 @@ int main(int argc, char * argv[])
     codes_store_register();
     resource_lp_init();
     test_client_register();
-
+    codes_ex_store_register();
     model_net_register();
 
     /* Setup takes the global config object, the registered LPs, and 
