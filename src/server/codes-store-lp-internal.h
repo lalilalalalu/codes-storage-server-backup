@@ -12,6 +12,7 @@
 #include <codes/codes-callback.h>
 #include <codes/lp-msg.h>
 #include <codes/resource-lp.h>
+#include <codes/local-storage-model.h>
 #include "codes-store-pipeline.h"
 
 #define CS_REQ_CONTROL_SZ 128
@@ -40,11 +41,6 @@ typedef struct cs_callback_id {
     int tid;   // thread id for particular event
 } cs_callback_id;
 
-typedef struct resource_callback_id
-{
-    int rs_type; /* type of resource, memory or storage */
-} resource_callback_id;
-
 // event structures
 struct ev_recv_cli_req {
     struct codes_store_request req;
@@ -55,8 +51,8 @@ struct ev_recv_cli_req {
 };
 
 struct ev_palloc_callback{
-    resource_callback cb;
-    cs_callback_id id;
+    resource_return cb;
+    int tag;
     struct {
         // see handle_pipeline_alloc_callback for usage
         int nthreads_init;
@@ -66,14 +62,14 @@ struct ev_palloc_callback{
 
 /* Only get the resource callback from the callee? */
 struct ev_memory_callback{
-    resource_callback cb;
-    resource_callback_id rs;
+    resource_return cb;
+    int tag;
 };
 
 /* Only get the resource callback from the callee? */
 struct ev_storage_init_callback{
-    resource_callback cb;
-    resource_callback_id rs;
+    resource_return cb;
+    int tag;
 };
 
 struct ev_recv_chunk {
@@ -81,13 +77,12 @@ struct ev_recv_chunk {
 };
 
 struct ev_storage_alloc_callback {
-   resource_callback cb;
-   cs_callback_id id;
+    resource_return cb;
+    int tag;
 };
 struct ev_complete_disk_op {
-    cs_callback_id id;
-    // data vs. metadata req - controls which queue will be searched
-    int is_data_op;
+    int tag;
+    lsm_return_t ret;
     struct {
         int chunk_id;
         uint64_t chunk_size;
