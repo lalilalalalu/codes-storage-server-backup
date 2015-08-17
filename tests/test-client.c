@@ -61,7 +61,8 @@ static void next(
 
     msg_set_header(test_client_magic, TEST_CLI_ACK, lp->gid, &h);
 
-    codes_store_send_req(&r, 0, lp, cli_mn_id, 0, &h, &ns->cb);
+    codes_store_send_req(&r, 0, lp, cli_mn_id, CODES_MCTX_DEFAULT, 0, &h,
+            &ns->cb);
 
     dprintf("%lu: sent %s request\n", lp->gid, is_write ? "write" : "read");
 }

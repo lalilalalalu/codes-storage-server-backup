@@ -95,6 +95,7 @@ struct cs_qitem {
     int op_id;
     struct codes_store_request req;
     struct codes_cb_params cli_cb;
+    struct codes_mctx cli_mctx;
     cs_pipelined_req *preq;
     struct qlist_head ql;
 };
@@ -255,6 +256,7 @@ static void cs_pre_run(cs_state * ns, tw_lp * lp)
 static void codes_store_send_resp(
         codes_store_ret_t rc,
         struct codes_cb_params const * p,
+        struct codes_mctx const * cli_mctx,
         tw_lp *lp)
 {
     // i'm a terrible person for using VLAs and everyone should know it
@@ -276,7 +278,8 @@ static void codes_store_send_resp(
     int prio = 0;
     model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
             (void*) &prio);
-    model_net_event(mn_id, CODES_STORE_LP_NAME, cli_lp, CS_REQ_CONTROL_SZ, 0.0,
+    model_net_event_mctx(mn_id, CODES_MCTX_DEFAULT, cli_mctx,
+            CODES_STORE_LP_NAME, cli_lp, CS_REQ_CONTROL_SZ, 0.0,
             p->info.event_size, data, 0, NULL, lp);
 }
 
@@ -438,6 +441,7 @@ void handle_recv_cli_req(
     qi->op_id = ns->op_idx_pl++;
     qi->req = m->req;
     qi->cli_cb = m->callback;
+    qi->cli_mctx = m->cli_mctx;
     qi->preq = NULL;
     qlist_add_tail(&qi->ql, &ns->pending_ops);
 
@@ -861,7 +865,7 @@ static void handle_complete_disk_op(
     }
 
     if (m->tag < 0) {
-        codes_store_send_resp(CODES_STORE_OK, &qi->cli_cb, lp);
+        codes_store_send_resp(CODES_STORE_OK, &qi->cli_cb, &qi->cli_mctx, lp);
         qlist_del(&qi->ql);
         rc_stack_push(lp, qi, free_qitem, ns->finished_ops);
         b->c1 = 1;
@@ -912,7 +916,8 @@ static void handle_complete_disk_op(
             // first to see all committed data acks the client
             if (p->committed == qi->req.xfer_size) {
                 b->c0 = 1;
-                codes_store_send_resp(CODES_STORE_OK, &qi->cli_cb, lp);
+                codes_store_send_resp(CODES_STORE_OK, &qi->cli_cb,
+                        &qi->cli_mctx, lp);
             }
 
             // no more work to do
@@ -1063,7 +1068,8 @@ void handle_complete_chunk_send(
         // if we are the last thread to send data to the client then ack
         if (p->forwarded == qi->req.xfer_size) {
             b->c2 = 1;
-            codes_store_send_resp(CODES_STORE_OK, &qi->cli_cb, lp);
+            codes_store_send_resp(CODES_STORE_OK, &qi->cli_cb, &qi->cli_mctx,
+                    lp);
         }
         // if we are the last thread then cleanup req and ack to client
         if (p->nthreads_fin == p->nthreads) {

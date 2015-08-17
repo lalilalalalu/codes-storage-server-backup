@@ -46,6 +46,7 @@ typedef struct cs_callback_id {
 struct ev_recv_cli_req {
     struct codes_store_request req;
     struct codes_cb_params callback;
+    struct codes_mctx cli_mctx;
     struct {
         int op_id; // needed to map to created op id
     } rc;

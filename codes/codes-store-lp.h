@@ -13,6 +13,7 @@
 
 #include <codes/lp-msg.h>
 #include <codes/codes-callback.h>
+#include <codes/codes-mapping-context.h>
 
 /*** LP name ***/
 
@@ -55,9 +56,10 @@ void codes_store_init_req(
 
 void codes_store_send_req(
         struct codes_store_request const * r,
-        int dest_id,
+        int dest_id, // LP relative ID
         tw_lp * sender,
         int model_net_id,
+        struct codes_mctx const * cli_mctx,
         int tag,
         msg_header const * h,
         struct codes_cb_info const * cb);

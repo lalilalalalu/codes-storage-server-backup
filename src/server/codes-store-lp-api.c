@@ -37,6 +37,7 @@ void codes_store_send_req(
         int dest_id, // LP relative ID
         tw_lp * sender,
         int model_net_id,
+        struct codes_mctx const * cli_mctx,
         int tag,
         msg_header const * h,
         struct codes_cb_info const * cb)
@@ -54,13 +55,14 @@ void codes_store_send_req(
     creq->callback.info = *cb;
     creq->callback.h = *h;
     creq->callback.tag = tag;
+    creq->cli_mctx = *cli_mctx;
 
     int prio = 0;
     model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
             (void*) &prio);
-    model_net_event(model_net_id, CODES_STORE_LP_NAME, store_lpid,
-            CS_REQ_CONTROL_SZ, 0.0, sizeof(cs_msg), &m, 0,
-            NULL, sender);
+    model_net_event_mctx(model_net_id, cli_mctx, CODES_MCTX_DEFAULT,
+            CODES_STORE_LP_NAME, store_lpid, CS_REQ_CONTROL_SZ, 0.0,
+            sizeof(cs_msg), &m, 0, NULL, sender);
 }
 
 void codes_store_send_req_rc(int model_net_id, tw_lp * sender)
