@@ -51,9 +51,6 @@ static void next(
         struct test_client_msg * m,
         tw_lp * lp)
 {
-    struct codes_mctx cli_grp_direct;
-    cli_grp_direct = codes_mctx_set_group_direct(1, NULL, true);
-
     struct codes_store_request r;
     msg_header h;
 
@@ -64,7 +61,7 @@ static void next(
 
     msg_set_header(test_client_magic, TEST_CLI_ACK, lp->gid, &h);
 
-    codes_store_send_req(&r, 0, lp, cli_mn_id, &cli_grp_direct, 0, &h,
+    codes_store_send_req(&r, 0, lp, cli_mn_id, CODES_MCTX_DEFAULT, 0, &h,
             &ns->cb);
 
 //    printf("\n Client %d sending to model-net ID %d ", lp->gid, lp->gid + 3);
