@@ -370,6 +370,7 @@ void cs_event_handler_rc(
         default:
             tw_error(TW_LOC, "unknown cs event type");
     }
+#undef X
 }
 
 void cs_finalize(cs_state *ns, tw_lp *lp) {
