@@ -23,6 +23,13 @@
 #include "codes-store-lp-internal.h"
 #include "codes-store-pipeline.h"
 
+static struct codes_mctx codes_store_lp_mctx =
+{
+    .type = CODES_MCTX_UNKNOWN
+};
+
+struct codes_mctx const * const CODES_STORE_LP_MCTX = &codes_store_lp_mctx;
+
 /// danger: debug messages will produce a LOT of output, even for small runs
 /// and especially in optimistic runs
 
@@ -43,9 +50,6 @@
 int cs_magic = 0;
 
 static int mn_id;
-static int cs_mapping_dflt = 0;
-static int offset = 0;
-static int num_client_lps = 0;
 
 /* system parameters */
 static int num_threads = 4;
@@ -57,13 +61,6 @@ static int bb_threshold = (1<<5);
 /* callback parameters. TODO: make these more flexible */
 struct codes_cb_info cb_lsm, cb_rsc_palloc, cb_rsc_memory,
                      cb_rsc_storage_init, cb_rsc_storage_alloc;
-
-/* mapping context */
-struct codes_mctx group_direct;
-
-/* global variables for codes mapping */
-static char lp_group_name[MAX_NAME_LENGTH];
-static int mapping_grp_id, mapping_type_id, mapping_rep_id, mapping_offset;
 
 struct cs_state {
     // my logical (not lp) id
@@ -247,7 +244,10 @@ void codes_store_configure(int model_net_id){
            u.storage_init_callback.tag, u.storage_init_callback.cb);
    INIT_CODES_CB_INFO(&cb_rsc_storage_alloc, cs_msg, h,
            u.storage_alloc_callback.tag, u.storage_alloc_callback.cb);
-    /* done!!! */
+
+   // finally, set up the server mapping context (NOTE: will need to do this
+   // for each annotation if/when we get to the point of using annos
+   codes_store_lp_mctx = codes_mctx_set_group_modulo_reverse(NULL, true);
 }
 
 /*pre-run function calls */
@@ -289,7 +289,7 @@ static void codes_store_send_resp(
     model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
             (void*) &prio);
     
-    model_net_event_mctx(mn_id, &group_direct, cli_mctx,
+    model_net_event_mctx(mn_id, CODES_STORE_LP_MCTX, cli_mctx,
             CODES_STORE_LP_NAME, cli_lp, CS_REQ_CONTROL_SZ, 0.0,
             p->info.event_size, data, 0, NULL, lp);
 }
@@ -300,19 +300,8 @@ static void codes_store_send_resp_rc(tw_lp *lp)
 }
 
 
-void cs_init(cs_state *ns, tw_lp *lp) {
-    
-    codes_mapping_get_lp_info(lp->gid, lp_group_name, &mapping_grp_id, NULL,
-            &mapping_type_id, NULL, &mapping_rep_id, &mapping_offset);
-
-    num_client_lps = codes_mapping_get_lp_count(lp_group_name, 1, CODES_CLIENT_LP_NAME,
-		NULL, 1);
- 	
-    if(!num_client_lps)	
-      tw_error(TW_LOC, "\n Number of client LPs not specified ");
-
-    group_direct = codes_mctx_set_group_direct(num_client_lps - 1, NULL, true);
-    
+void cs_init(cs_state *ns, tw_lp *lp)
+{
     ns->server_index = codes_mapping_get_lp_relative_id(lp->gid, 0, 0);
 
     INIT_QLIST_HEAD(&ns->pending_ops);
@@ -623,7 +612,7 @@ void handle_storage_alloc_callback(
       int prio = 0;
       model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
                     (void*) &prio);
-      model_net_pull_event_mctx(mn_id, &qi->cli_mctx, &group_direct, 
+      model_net_pull_event_mctx(mn_id, CODES_STORE_LP_MCTX, &qi->cli_mctx,
 				CODES_STORE_LP_NAME, qi->cli_cb.h.src,
                     		t->chunk_size, 0.0, sizeof(cs_msg), &m_recv, lp);
 }
@@ -915,7 +904,7 @@ static void handle_complete_disk_op(
             msg_set_header(cs_magic, CS_COMPLETE_CHUNK_SEND, lp->gid, &m_loc.h);
             GETEV(compl, &m_loc, complete_chunk_send);
             compl->id = id;
-            model_net_event_mctx(mn_id, &group_direct, &qi->cli_mctx, 
+            model_net_event_mctx(mn_id, CODES_STORE_LP_MCTX, &qi->cli_mctx, 
 			CODES_STORE_LP_NAME, cli_lp, t->chunk_size,
                         0.0, 0, NULL, sizeof(m_loc), &m_loc, lp);
         }
@@ -1002,8 +991,8 @@ static void handle_complete_disk_op(
                 int prio = 0;
                 model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
                         (void*) &prio);
-                model_net_pull_event_mctx(mn_id, &qi->cli_mctx, &group_direct,
-			CODES_STORE_LP_NAME, cli_lp,
+                model_net_pull_event_mctx(mn_id, CODES_STORE_LP_MCTX,
+                        &qi->cli_mctx, CODES_STORE_LP_NAME, cli_lp,
                         chunk_sz, 0.0, sizeof(cs_msg), &m_recv, lp);
                 lprintf("%lu: pull req to %lu\n", lp->gid, cli_lp);
             }

@@ -16,7 +16,6 @@
 #include "codes-store-lp-internal.h"
 
 char const * const CODES_STORE_LP_NAME = "codes-store";
-char const * const CODES_CLIENT_LP_NAME = "test-client";
 
 void codes_store_init_req(
         enum codes_store_req_type type,

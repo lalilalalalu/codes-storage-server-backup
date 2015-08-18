@@ -18,6 +18,8 @@
 #define CS_REQ_CONTROL_SZ 128
 
 extern int cs_magic;
+// the map context used internally by codes-store LPs
+extern struct codes_mctx const * const CODES_STORE_LP_MCTX;
 
 #define CS_EVENTS \
     X(CS_RECV_CLI_REQ,            recv_cli_req, = 20) \
