@@ -25,6 +25,11 @@ static int num_reqs;
 static int req_size;
 static int test_client_magic;
 static int cli_mn_id;
+// following is for mapping clients to servers
+static int do_server_mapping = 0;
+static int num_servers;
+static int num_clients;
+static int clients_per_server;
 
 enum test_client_event
 {
@@ -33,6 +38,7 @@ enum test_client_event
 
 struct test_client_state
 {
+    int cli_rel_id;
     int num_complete_wr;
     int num_complete_rd;
     struct codes_cb_info cb;
@@ -61,8 +67,13 @@ static void next(
 
     msg_set_header(test_client_magic, TEST_CLI_ACK, lp->gid, &h);
 
-    codes_store_send_req(&r, 0, lp, cli_mn_id, CODES_MCTX_DEFAULT, 0, &h,
-            &ns->cb);
+    int dest_server_id;
+    if (do_server_mapping)
+        dest_server_id = ns->cli_rel_id / clients_per_server;
+    else
+        dest_server_id = 0;
+    codes_store_send_req(&r, dest_server_id, lp, cli_mn_id, CODES_MCTX_DEFAULT,
+            0, &h, &ns->cb);
 
 //    printf("\n Client %d sending to model-net ID %d ", lp->gid, lp->gid + 3);
     
@@ -139,6 +150,8 @@ static void test_client_init(
     ns->num_complete_wr = 0;
     ns->num_complete_rd = 0;
     INIT_CODES_CB_INFO(&ns->cb, struct test_client_msg, h, tag, ret);
+
+    ns->cli_rel_id = codes_mapping_get_lp_relative_id(lp->gid, 0, 0);
 }
 
 static void test_client_pre_run(
@@ -188,6 +201,17 @@ void test_client_configure(int model_net_id){
     rc = configuration_get_value_int(&config, "test-client", "req_size", NULL,
             &req_size);
     assert(!rc);
+
+    configuration_get_value_int(&config, "test-client", "do_server_mapping", NULL,
+            &do_server_mapping);
+
+    num_servers =
+        codes_mapping_get_lp_count(NULL, 0, CODES_STORE_LP_NAME, NULL, 1);
+    num_clients =
+        codes_mapping_get_lp_count(NULL, 0, CLIENT_LP_NM, NULL, 1);
+    clients_per_server = num_clients / num_servers;
+    if (clients_per_server == 0)
+        clients_per_server = 1;
 }
 
 /*

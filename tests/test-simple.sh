@@ -32,3 +32,29 @@ grep "read_bytes:3000000" "$out_dir"-opt-big/lsm-category-all >/dev/null
 set +e
 
 rm -rf "$out_dir-ser" "$out_dir-ser-big" "$out_dir-opt-big"
+
+# dragonfly's turn
+
+rm -rf "$out_dir-dfly-ser" "$out_dir-dfly-opt"
+
+set -e
+./tests/test-simple --codes-config="${srcdir}"/tests/conf/test-dragonfly.conf --lp-io-dir="$out_dir"-dfly-ser
+
+wr=$(grep "write_bytes:150000" "$out_dir-dfly-ser"/lsm-category-all | wc -l)
+rd=$(grep "read_bytes:150000" "$out_dir-dfly-ser"/lsm-category-all | wc -l)
+set +e
+if [[ $wr != 264 || $rd != 264 ]] ; then
+    echo "error: wrong byte counts for serial dragonfly"
+fi
+
+set -e
+./tests/test-simple --sync=3 --codes-config="${srcdir}"/tests/conf/test-dragonfly.conf --lp-io-dir="$out_dir"-dfly-opt
+
+wr=$(grep "write_bytes:150000" "$out_dir-dfly-opt"/lsm-category-all | wc -l)
+rd=$(grep "read_bytes:150000" "$out_dir-dfly-opt"/lsm-category-all | wc -l)
+set +e
+if [[ $wr != 264 || $rd != 264 ]] ; then
+    echo "error: wrong byte counts for serial dragonfly"
+fi
+
+rm -rf "$out_dir-dfly-ser" "$out_dir-dfly-opt"
