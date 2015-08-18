@@ -54,7 +54,7 @@ wr=$(grep "write_bytes:150000" "$out_dir-dfly-opt"/lsm-category-all | wc -l)
 rd=$(grep "read_bytes:150000" "$out_dir-dfly-opt"/lsm-category-all | wc -l)
 set +e
 if [[ $wr != 264 || $rd != 264 ]] ; then
-    echo "error: wrong byte counts for serial dragonfly"
+    echo "error: wrong byte counts for optimistic dragonfly"
 fi
 
 rm -rf "$out_dir-dfly-ser" "$out_dir-dfly-opt"
