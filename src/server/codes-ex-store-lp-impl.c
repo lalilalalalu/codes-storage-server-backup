@@ -92,13 +92,23 @@ static void es_init(es_state_t * ns, tw_lp * lp)
 
     bj_hashlittle2(CODES_EX_STORE_LP_NAME, strlen(CODES_EX_STORE_LP_NAME), &h1, &h2);
     ces_magic = h1+h2;
-    
-    configuration_get_value_double(&config, CODES_EX_STORE_LP_NAME,
+   
+    int rc; 
+    rc = configuration_get_value_double(&config, CODES_EX_STORE_LP_NAME,
             "startup_ns", NULL, &ns->params.latency);
-    configuration_get_value_double(&config, CODES_EX_STORE_LP_NAME,
+    if( rc < 0)
+	ns->params.latency = 10000; /* default to 10 us */
+    rc = configuration_get_value_double(&config, CODES_EX_STORE_LP_NAME,
             "bw_mbps", NULL, &ns->params.bw_mbps);
-    configuration_get_value_int(&config, CODES_EX_STORE_LP_NAME,
+    
+    if(rc < 0)
+       ns->params.bw_mbps = 16000; /* Setting default to 16 Gbps */
+    
+   rc = configuration_get_value_int(&config, CODES_EX_STORE_LP_NAME,
             "num_io_nodes", NULL, &ns->num_io_nodes);
+
+   if(rc < 0)
+	tw_error(TW_LOC, "\n Number of I/O nodes must be specified ");
 
    ns->next_recv_idle_time = malloc(ns->num_io_nodes * sizeof(tw_stime));
    tw_stime st = tw_now(lp);
@@ -181,7 +191,8 @@ static void handle_write_to_store(
 
     tw_lpid global_node_id = m->h.src;
     int local_node_id = codes_mapping_get_lp_relative_id(global_node_id, 0, 0);
-    assert(local_node_id >= 0 && local_node_id < ns->num_io_nodes);
+    // TODO: Add self suspend mode
+    //assert(local_node_id >= 0 && local_node_id < ns->num_io_nodes);
     
     tw_stime queue_time = 0;
   

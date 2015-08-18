@@ -106,6 +106,7 @@ int main(int argc, char * argv[])
         assert(ret == 0 || !"lp_io_flush failure");
     }
 
+    model_net_report_stats(model_net_id);
     tw_end();
     return 0;
 }

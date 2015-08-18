@@ -28,6 +28,7 @@
 
 // thread specific debug messages (producing a finer-grain log)
 #define CS_THREAD_DBG 0
+
 #define tprintf(_fmt, ...) \
     do {if (CS_THREAD_DBG) printf(_fmt, __VA_ARGS__);} while (0)
 
@@ -42,6 +43,9 @@
 int cs_magic = 0;
 
 static int mn_id;
+static int cs_mapping_dflt = 0;
+static int offset = 0;
+static int num_client_lps = 0;
 
 /* system parameters */
 static int num_threads = 4;
@@ -53,6 +57,13 @@ static int bb_threshold = (1<<5);
 /* callback parameters. TODO: make these more flexible */
 struct codes_cb_info cb_lsm, cb_rsc_palloc, cb_rsc_memory,
                      cb_rsc_storage_init, cb_rsc_storage_alloc;
+
+/* mapping context */
+struct codes_mctx group_direct;
+
+/* global variables for codes mapping */
+static char lp_group_name[MAX_NAME_LENGTH];
+static int mapping_grp_id, mapping_type_id, mapping_rep_id, mapping_offset;
 
 struct cs_state {
     // my logical (not lp) id
@@ -245,7 +256,6 @@ static void cs_pre_run(cs_state * ns, tw_lp * lp)
     msg_header h;
     msg_set_header(cs_magic, CS_STORAGE_INIT_CALLBACK, lp->gid, &h); 
 
-    /* Now reserve the storage */
     resource_lp_reserve(storage_size, 0, lp, CODES_MCTX_DEFAULT, INT_MAX,
             &h, &cb_rsc_storage_init);
 }
@@ -278,7 +288,8 @@ static void codes_store_send_resp(
     int prio = 0;
     model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
             (void*) &prio);
-    model_net_event_mctx(mn_id, CODES_MCTX_DEFAULT, cli_mctx,
+    
+    model_net_event_mctx(mn_id, &group_direct, cli_mctx,
             CODES_STORE_LP_NAME, cli_lp, CS_REQ_CONTROL_SZ, 0.0,
             p->info.event_size, data, 0, NULL, lp);
 }
@@ -290,6 +301,18 @@ static void codes_store_send_resp_rc(tw_lp *lp)
 
 
 void cs_init(cs_state *ns, tw_lp *lp) {
+    
+    codes_mapping_get_lp_info(lp->gid, lp_group_name, &mapping_grp_id, NULL,
+            &mapping_type_id, NULL, &mapping_rep_id, &mapping_offset);
+
+    num_client_lps = codes_mapping_get_lp_count(lp_group_name, 1, CODES_CLIENT_LP_NAME,
+		NULL, 1);
+ 	
+    if(!num_client_lps)	
+      tw_error(TW_LOC, "\n Number of client LPs not specified ");
+
+    group_direct = codes_mctx_set_group_direct(num_client_lps - 1, NULL, true);
+    
     ns->server_index = codes_mapping_get_lp_relative_id(lp->gid, 0, 0);
 
     INIT_QLIST_HEAD(&ns->pending_ops);
@@ -600,8 +623,9 @@ void handle_storage_alloc_callback(
       int prio = 0;
       model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
                     (void*) &prio);
-      model_net_pull_event(mn_id, CODES_STORE_LP_NAME, qi->cli_cb.h.src,
-                    t->chunk_size, 0.0, sizeof(cs_msg), &m_recv, lp);
+      model_net_pull_event_mctx(mn_id, &qi->cli_mctx, &group_direct, 
+				CODES_STORE_LP_NAME, qi->cli_cb.h.src,
+                    		t->chunk_size, 0.0, sizeof(cs_msg), &m_recv, lp);
 }
 // bitfields used:
 // c0 - there was data to pull post- thread allocation
@@ -891,8 +915,9 @@ static void handle_complete_disk_op(
             msg_set_header(cs_magic, CS_COMPLETE_CHUNK_SEND, lp->gid, &m_loc.h);
             GETEV(compl, &m_loc, complete_chunk_send);
             compl->id = id;
-            model_net_event(mn_id, CODES_STORE_LP_NAME, cli_lp, t->chunk_size,
-                    0.0, 0, NULL, sizeof(m_loc), &m_loc, lp);
+            model_net_event_mctx(mn_id, &group_direct, &qi->cli_mctx, 
+			CODES_STORE_LP_NAME, cli_lp, t->chunk_size,
+                        0.0, 0, NULL, sizeof(m_loc), &m_loc, lp);
         }
         else {
 	    // first check if the BB node needs to be drained 
@@ -977,7 +1002,8 @@ static void handle_complete_disk_op(
                 int prio = 0;
                 model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
                         (void*) &prio);
-                model_net_pull_event(mn_id, CODES_STORE_LP_NAME, cli_lp,
+                model_net_pull_event_mctx(mn_id, &qi->cli_mctx, &group_direct,
+			CODES_STORE_LP_NAME, cli_lp,
                         chunk_sz, 0.0, sizeof(cs_msg), &m_recv, lp);
                 lprintf("%lu: pull req to %lu\n", lp->gid, cli_lp);
             }

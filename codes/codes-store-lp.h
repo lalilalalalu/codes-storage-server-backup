@@ -18,6 +18,7 @@
 /*** LP name ***/
 
 extern char const * const CODES_STORE_LP_NAME;
+extern char const * const CODES_CLIENT_LP_NAME;
 
 // LP API parameters
 
