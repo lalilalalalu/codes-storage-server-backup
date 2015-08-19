@@ -8,11 +8,12 @@
 #define CLIENT_H
 
 #include <ross.h>
-#include "../util/msg.h"
-#include "codes/lp-msg.h"
-#include "codes/codes-workload.h"
+#include <codes/lp-msg.h>
+#include <codes/codes-workload.h>
 
 extern int triton_client_magic;
+
+extern char const * const CLIENT_LP_NM;
 
 /* rosd needs to know client msg types, so expose here */ 
 typedef struct triton_client_state triton_client_state;
@@ -28,7 +29,7 @@ enum triton_client_event
 
 struct triton_client_msg {
     msg_header header;
-    triton_io_gresp resp;
+    /* TODO: triton_io_gresp resp;*/
 
     /* previous operation index for reverse computation */
     unsigned long op_index_prev;

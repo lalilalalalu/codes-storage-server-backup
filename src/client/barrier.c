@@ -6,13 +6,12 @@
 
 #include "barrier.h"
 #include "client.h"
-#include "codes/codes_mapping.h"
-#include "codes/lp-type-lookup.h"
-#include "codes/jenkins-hash.h"
-#include "codes/codes.h"
-#include "codes/quicklist.h"
-#include "codes/lp-io.h"
-#include "../util/map_util.h"
+#include <codes/codes_mapping.h>
+#include <codes/lp-type-lookup.h>
+#include <codes/jenkins-hash.h>
+#include <codes/codes.h>
+#include <codes/quicklist.h>
+#include <codes/lp-io.h>
 
 #define BARRIER_DEBUG 0
 
@@ -154,7 +153,8 @@ void handle_barrier(
         tw_lp * lp){
     struct qlist_head *ent;
     barrier_op *op;
-    int rank = get_client_index(m->src);
+    // TODO: int rank = get_client_index(m->src);
+    int rank = 0;
 #if BARRIER_DEBUG
     fprintf(ns->fdbg, "barrier: rank:%d, count:%d, root:%d, event_num:%d\n", rank, m->count, m->root, m->event_num);
 #endif
@@ -209,7 +209,7 @@ void handle_barrier(
         /* done, send all acks back */
         int i;
         for (i = 0; i < op->count; i++){
-            tw_event *e = codes_event_new(get_client_lpid(op->root+i), 
+            tw_event *e = codes_event_new(-1ul /*TODO: get_client_lpid(op->root+i)*/, 
                     codes_local_latency(lp), lp);
             triton_client_msg *m_ack = tw_event_data(e);
             m_ack->header.magic = triton_client_magic;
@@ -239,7 +239,7 @@ void handle_barrier_rev(
             break;
         }
     }
-    int rank = get_client_index(m->src);
+    int rank = 0; /* TODO: get_client_index(m->src); */
 #if BARRIER_DEBUG
     fprintf(ns->fdbg, "barrier: rank:%d, count:%d, root:%d, event_num:%d REV\n", rank, m->count, m->root, m->event_num);
 #endif

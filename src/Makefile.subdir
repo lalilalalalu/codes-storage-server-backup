@@ -6,5 +6,13 @@ src_libcodes_storage_server_a_SOURCES = \
 	src/server/codes-store-pipeline.h \
 	src/server/codes-store-lp-impl.c \
 	src/server/codes-store-lp-internal.h \
-        src/server/codes-ex-store-api.c \
-	src/server/codes-ex-store-lp-impl.c
+	src/server/codes-ex-store-api.c \
+	src/server/codes-ex-store-lp-impl.c \
+	src/client/client.h \
+	src/client/client.c \
+	src/client/barrier.h \
+	src/client/barrier.c \
+	src/client/io-sim-mode.h \
+	src/client/io-sim-mode.c \
+	src/client/dist.h \
+	src/client/dist.c

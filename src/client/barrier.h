@@ -12,7 +12,7 @@
  * acknowledges each of them */
 
 #include <ross.h>
-#include "codes/quicklist.h"
+#include <codes/quicklist.h>
 
 extern int barrier_magic;
 
