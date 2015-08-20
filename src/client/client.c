@@ -12,6 +12,9 @@
 #include <codes/codes.h>
 #include <codes/quicklist.h>
 #include <codes/model-net.h>
+#include <codes/codes-store-lp.h>
+#include <codes/codes-mapping-context.h>
+#include <codes/codes-callback.h>
 
 #include "client.h"
 #include "barrier.h"
@@ -34,8 +37,6 @@ static int num_clients;
 /* distribution parameters */
 static unsigned int stripe_factor, strip_size; 
 
-extern int model_net_id;
-
 static tw_lpid barrier_lpid;
 
 /* for mock tests */ 
@@ -47,8 +48,12 @@ static int req_size_mock;
 /* for workloads with open - assume the file is shared among ALL clients */
 static int is_shared_open_mode = 0;
 
+static int cli_mn_id;
+
 /* workload-specific parameters */
 static codes_workload_config_return wkld_cfg;
+
+static struct codes_cb_info cli_cb;
 
 typedef struct client_req client_req;
 
@@ -64,8 +69,10 @@ static struct qlist_head file_map_global;
 struct client_req {
     file_map map;
     uint64_t *oid_offs, *oid_lens;
-    int *status, status_ct;
-    unsigned long op_index;
+    int *status;
+    int status_ct;
+    int op_index;
+    enum codes_store_req_type type; // cache for stats gathering
     double issue_time;
     struct qlist_head ql;
 };
@@ -86,7 +93,7 @@ struct triton_client_state {
     int op_status_ct;
     struct qlist_head ops;
 
-    unsigned long op_index_current;
+    int op_index_current;
 
     /* currently, we just push completed ops into here. We need a way of doing
      * our own cleanup after GVT */
@@ -197,10 +204,18 @@ tw_lptype triton_client_lp = {
 
 /**** BEGIN UTILITY DECLS ****/
 
+struct striped_req_id
+{
+    int op_index;
+    int strip;
+};
+static int striped_req_to_tag(int op_index, int strip);
+static struct striped_req_id tag_to_striped_req(int tag);
+
 static file_map* get_random_file_id_mapping(uint64_t file_id, unsigned int stripe_factor);
 static client_req* client_req_init(unsigned int stripe_factor); 
 static void client_req_destroy(client_req *req);
-static void enter_barrier_event(int count, int root, tw_lp *lp);
+static void enter_barrier_event(int count, int root, int rank, tw_lp *lp);
 static void enter_barrier_event_rc(tw_lp *lp);
 
 /**** BEGIN IMPLEMENTATIONS ****/
@@ -209,7 +224,7 @@ void triton_client_register(){
     lp_type_register(CLIENT_LP_NM, &triton_client_lp);
 }
 
-void triton_client_configure(){
+void triton_client_configure(int model_net_id){
     uint32_t h1=0, h2=0;
 
     bj_hashlittle2(CLIENT_LP_NM, strlen(CLIENT_LP_NM), &h1, &h2);
@@ -218,8 +233,12 @@ void triton_client_configure(){
     num_clients = codes_mapping_get_lp_count(NULL, 0, CLIENT_LP_NM, NULL, 1);
     assert(num_clients>0);
 
+    INIT_CODES_CB_INFO(&cli_cb, triton_client_msg, header, tag, ret);
+
     barrier_lpid = codes_mapping_get_lpid_from_relative(0, NULL, "barrier",
             NULL, 0);
+
+    cli_mn_id = model_net_id;
 
     char val[MAX_NAME_LENGTH];
     int rc;
@@ -506,7 +525,7 @@ void handle_triton_client_kickoff(
         case REQ_MODE_MOCK:
             /* cheat: inc remaining requests and process a fake success ack
              * - acks events generate new requests */
-            /* TODO: m->resp.ack_status = 0;*/
+            m->ret = CODES_STORE_OK;
             ns->reqs_remaining++;
             ns->op_status_ct++;
             handle_triton_client_recv_ack_mock(ns,m,lp);
@@ -543,17 +562,15 @@ void handle_triton_client_recv_ack_mock(
                 assert(!"unexpected or unitialized mapping mode");
         }
 
-        /* TODO:
-        triton_io_greq mr;
-        msg_set_header(triton_client_magic, TRITON_CLI_RECV_ACK, lp->gid, 
-                &mr.callback.header);
-        msg_set_cli_callback(ULONG_MAX, sizeof(triton_client_msg),
-                offsetof(triton_client_msg, header), 
-                offsetof(triton_client_msg, resp), &mr.callback);
-        msg_set_request(mock_is_write ? REQ_WRITE : REQ_READ, 0, oid, 0,
-                req_size_mock, &mr.req);
-        triton_send_request(&mr, lp, model_net_id);
-        */
+        msg_header h;
+        struct codes_store_request r;
+        msg_set_header(triton_client_magic, TRITON_CLI_RECV_ACK, lp->gid, &h);
+        codes_store_init_req(mock_is_write ? CSREQ_WRITE : CSREQ_READ,
+                0, oid, 0, req_size_mock, &r);
+
+        codes_store_send_req(&r, 0, lp, cli_mn_id, CODES_MCTX_DEFAULT, 0, &h,
+                &cli_cb);
+
         ns->op_status_ct ++;
 
 #if CLIENT_DEBUG && 0
@@ -600,28 +617,23 @@ void handle_client_wkld_next(
         int is_open = op.op_type == CODES_WK_OPEN;
         int is_write= op.op_type == CODES_WK_WRITE;
         /* operations that create an ROSD request across the network */
-        /* TODO:
-        triton_io_greq mr;
-        msg_set_header(triton_client_magic, TRITON_CLI_RECV_ACK, lp->gid, 
-                &mr.callback.header);
+
+        msg_header h;
+        struct codes_store_request r;
+        msg_set_header(triton_client_magic, TRITON_CLI_RECV_ACK, lp->gid, &h);
         m->op_index_prev = ns->op_index_current;
-        msg_set_cli_callback(ns->op_index_current++, sizeof(triton_client_msg),
-                offsetof(triton_client_msg, header),
-                offsetof(triton_client_msg, resp), &mr.callback);
-        */
 
         uint64_t file_id, off, len;
         if (is_open){
-            /* TODO: mr.req.req_type = REQ_OPEN;*/
+            r.type = op.u.open.create_flag ? CSREQ_CREATE : CSREQ_OPEN;
             file_id = op.u.open.file_id;
-            /* TODO: mr.req.create = op.u.open.create_flag; */
             len = 1;
             /* NON-ROOT (rank 0) processes - if in shared file mode go
              * immediately into the barrier */
             if (is_shared_open_mode && ns->client_idx != 0) {
                 /* current implementation - contact the sentinel barrier LP
                  * directly, without going through the network */
-                enter_barrier_event(0, num_clients, lp);
+                enter_barrier_event(0, num_clients, ns->client_idx, lp);
                 /* in addition, we must ensure the file pointer exists before
                  * we process the next workload item */
                 int f;
@@ -639,13 +651,13 @@ void handle_client_wkld_next(
             }
         }
         else if (is_write){
-            /* TODO: mr.req.req_type = REQ_WRITE; */
+            r.type = CSREQ_WRITE;
             file_id = op.u.write.file_id;
             off = op.u.write.offset;
             len = op.u.write.size;
         }
         else{
-            /* TODO: mr.req.req_type = REQ_READ; */
+            r.type = CSREQ_READ;
             file_id = op.u.read.file_id;
             off = op.u.read.offset;
             len = op.u.read.size;
@@ -691,8 +703,9 @@ void handle_client_wkld_next(
 
         /* initialize the queue item we'll be adding */
         client_req *req = client_req_init(stripe_factor);
-        // TODO: req->op_index = mr.callback.op_index;
-        // TODO: req->issue_time = tw_now(lp);
+        req->op_index = ns->op_index_current;
+        req->issue_time = tw_now(lp);
+        req->type = r.type;
 
         /* from here, either error or success, so go ahead and add to queue */
         qlist_add_tail(&req->ql, &ns->ops); 
@@ -738,7 +751,8 @@ void handle_client_wkld_next(
                 case MAP_MODE_WKLD_FILE_ID:
                 case MAP_MODE_WKLD_HASH:
                     // TODO: placement_find_closest(req->map.oids[0],1,&srv_l);
-                    srv = srv_l;
+                    // TODO: srv = srv_l;
+                    srv = 0;
                     break;
                 case MAP_MODE_RANDOM_PERSIST:
                     req->map = *get_random_file_id_mapping(file_id, 1);
@@ -746,14 +760,17 @@ void handle_client_wkld_next(
                 default:
                     tw_error(TW_LOC, "bad map mode for non-striped request");
             }
-            // TODO: mr.req.xfer_offset  = off;
-            // TODO: mr.req.xfer_size    = len;
-            // TODO: mr.req.oid = req->map.oids[0];
-            // TODO: triton_send_request(&mr, lp, model_net_id);
+            r.xfer_offset  = off;
+            r.xfer_size    = len;
+            r.oid = req->map.oids[0];
+            // TODO: calculate server index
+            codes_store_send_req(&r, srv, lp, cli_mn_id,
+                    CODES_MCTX_DEFAULT,
+                    striped_req_to_tag(ns->op_index_current, 0), &h, &cli_cb);
             req->status_ct++;
             req->status[0]++;
 #if CLIENT_DEBUG && TODO
-            unsigned long rosd_ul;
+            unsigned long rosd_ul = 0;
             /* TODO: placement_find_closest(mr.req.oid, 1, &rosd_ul);*/
             /* TODO: tw_lpid rosd_lp = get_rosd_lpid(rosd_ul);*/
             fprintf(ns->fdbg,
@@ -769,14 +786,18 @@ void handle_client_wkld_next(
             }
             MN_START_SEQ();
             for (i = 0; i < stripe_factor; i++){
-                // TODO: mr.req.oid = req->map.oids[i];
+                r.oid = req->map.oids[i];
                 if (is_open){
                     req->status_ct++;
                     req->status[i]++;
-                    /* TODO: mr.req.xfer_size = 1; */
-                    /* TODO: triton_send_request(&mr, lp, model_net_id); */
+                    r.xfer_size = 1;
+                    // TODO: compute server id
+                    codes_store_send_req(&r, 0, lp, cli_mn_id,
+                            CODES_MCTX_DEFAULT,
+                            striped_req_to_tag(ns->op_index_current, i),
+                            &h, &cli_cb);
 #if CLIENT_DEBUG
-                    unsigned long rosd_ul;
+                    unsigned long rosd_ul = 0;
                     /* TODO: placement_find_closest(mr.req.oid, 1, &rosd_ul); */
                     /* TODO: tw_lpid rosd_lp = get_rosd_lpid(rosd_ul);*/
                     fprintf(ns->fdbg,
@@ -787,9 +808,13 @@ void handle_client_wkld_next(
                 else if (req->oid_lens[i] > 0){
                     req->status_ct++;
                     req->status[i]++;
-                    // TODO: mr.req.xfer_offset = req->oid_offs[i];
-                    // TODO: mr.req.xfer_size   = req->oid_lens[i];
-                    // TODO: triton_send_request(&mr, lp, model_net_id);
+                    r.xfer_offset = req->oid_offs[i];
+                    r.xfer_size   = req->oid_lens[i];
+                    // TODO: compute server id
+                    codes_store_send_req(&r, 0, lp, cli_mn_id,
+                            CODES_MCTX_DEFAULT,
+                            striped_req_to_tag(ns->op_index_current, i),
+                            &h, &cli_cb);
 #if CLIENT_DEBUG && TODO
                     unsigned long rosd_ul;
                     // TODO: placement_find_closest(mr.req.oid, 1, &rosd_ul);
@@ -802,6 +827,8 @@ void handle_client_wkld_next(
             }
             MN_END_SEQ();
         }
+        // in either case, update the opid
+        ns->op_index_current++;
     }
     else if (op.op_type == CODES_WK_DELAY || op.op_type == CODES_WK_CLOSE){
         /* operations that simply invoke another workload op */
@@ -820,7 +847,8 @@ void handle_client_wkld_next(
         /* a count of -1 means all ranks (with an assumed root of 0) */
         assert(!(op.u.barrier.count == -1 && op.u.barrier.root != 0));
         enter_barrier_event(op.u.barrier.root,
-                (op.u.barrier.count == -1) ? num_clients : op.u.barrier.count, lp);
+                (op.u.barrier.count == -1) ? num_clients : op.u.barrier.count,
+                ns->client_idx, lp);
     }
     else{
         /* no-op: io kernel lang has non-codes operations
@@ -857,32 +885,27 @@ void handle_triton_client_recv_ack_wkld(
         return;
     }
     /*assert(!ns->wkld_done);*/
-    
+
+    struct striped_req_id rid = tag_to_striped_req(m->tag);
+
     /* first find the associated operation */
     struct qlist_head *ent;
     client_req *req;
     qlist_for_each(ent, &ns->ops){
         client_req *tmp = qlist_entry(ent,client_req,ql);
-        /* TODO:
-        if (tmp->op_index == m->resp.op_index){
+        if (tmp->op_index == rid.op_index){
             req = tmp;
             break;
         }
-        */
     }
     /* we better have found it... */
     if (ent == &ns->ops){
         char buf[128];
-        /* TODO:
-        enum request_type t = m->resp.req.req_type;
         int written = sprintf(buf,
-                "client %d: recv unexpected ack from LP %lu, type %s, oid %lu, op idx %lu\n", 
+                "client %d: recv unexpected ack from LP %lu, "
+                "op idx %d, strip %d (tag %d)\n",
                 ns->client_idx, m->header.src,
-                (t==REQ_OPEN)?"open":((t==REQ_READ)?"read":"write"),
-                m->resp.req.oid,
-                m->resp.op_index);
-        */
-        int written = 0;
+                rid.op_index, rid.strip, m->tag);
         lp_io_write(lp->gid, "errors", written, buf);
         ns->error_ct = 1;
 #if CLIENT_DEBUG
@@ -890,23 +913,9 @@ void handle_triton_client_recv_ack_wkld(
 #endif
         return;
     }
-     
-    /* check which ack has come in 
-     * NOTE: oids assumed distinct per request */
-    /* TODO:
-    unsigned int i;
-    for (i = 0; 
-            i < stripe_factor && req->map.oids[i] != m->resp.req.oid; 
-            i++);
-    // model error: better have found it...
-    if (i == stripe_factor){
-        tw_error(TW_LOC, "client %d: ack for oid %lu not matched\n", 
-                ns->client_idx, m->resp.req.oid);
-    }
-    */
-    unsigned int i = 0;
+
     /* ensure we are expecting this ack - no duplicates */
-    if (req->status_ct == 0 || req->status[i] == 0){
+    if (req->status_ct == 0 || req->status[rid.strip] == 0){
         char buf[128];
         int written = sprintf(buf, "client %d recv'd unexpected ack\n",
                 ns->client_idx);
@@ -919,7 +928,7 @@ void handle_triton_client_recv_ack_wkld(
     }
     else{
         req->status_ct--;
-        req->status[i]--;
+        req->status[rid.strip]--;
     }
 
     if (req->status_ct == 0){
@@ -929,18 +938,16 @@ void handle_triton_client_recv_ack_wkld(
         printf("CLIENT %d (lp %lu): op time %1.5e at %1.5e\n",
                 ns->client_idx, lp->gid, diff, tw_now(lp));
 #endif
-        /* TODO:
-        enum request_type t = m->resp.req.req_type;
         // find the corresponding stats
         int f;
         for (f = 0; f < ns->num_files && 
                 ns->file_ids[f] != req->map.file_id; f++);
         assert(f < ns->num_files);
-        if (t == REQ_OPEN){
+        if (req->type == CSREQ_OPEN){
             m->prev_time = ns->open_times[f];
             ns->open_times[f] += diff;
         }
-        else if (t == REQ_WRITE){
+        else if (req->type == CSREQ_WRITE){
             m->prev_time = ns->write_times[f];
             ns->write_times[f] += diff;
             // update end time regardless
@@ -952,23 +959,20 @@ void handle_triton_client_recv_ack_wkld(
             // update end time regardless
             ns->end_read_times[f] = tw_now(lp);
         }
-        */
         //tw_output(lp,"%d times: prev:%.17e now:%.17e issue:%.17e, event:%5d\n", 
                 //ns->client_idx, m->prev_time, tw_now(lp), req->issue_time, 
                 //ns->event_num);
 
 
         ns->op_status_ct--;
-        /* TODO:
-        if (is_shared_open_mode && m->resp.req.req_type == REQ_OPEN &&
+        if (is_shared_open_mode && req->type == CSREQ_OPEN &&
                 ns->client_idx == 0) {
             // current implementation - contact the sentinel barrier LP
             // directly, without going through the network
-            enter_barrier_event(0, num_clients, lp);
+            enter_barrier_event(0, num_clients, ns->client_idx, lp);
             return;
         }
         else
-        */
             handle_client_wkld_next(ns, m, lp);
         /* move the entry to the completed q */
         qlist_del(ent);
@@ -981,8 +985,7 @@ void handle_triton_client_recv_ack(
         triton_client_msg * m,
         tw_lp * lp){
 
-    /* TODO: check error codes */
-    // TODO: assert(m->resp.ack_status == 0);
+    assert(m->ret == CODES_STORE_OK);
 
     switch(io_sim_cli_req_mode){
         case REQ_MODE_MOCK:
@@ -1019,7 +1022,7 @@ void handle_triton_client_recv_ack_rev_mock(
         triton_client_msg * m,
         tw_lp * lp){
     ns->reqs_remaining++;
-    // TODO: triton_send_request_rev(req_size_mock, lp, model_net_id);
+    codes_store_send_req_rc(cli_mn_id, lp);
     if (io_sim_cli_oid_map_mode == MAP_MODE_RANDOM){
         tw_rand_reverse_unif(lp->rng);
     }
@@ -1058,7 +1061,7 @@ void handle_client_wkld_next_rev(
         }
         assert(ent != &ns->ops);
 
-        uint64_t file_id, off, len;
+        uint64_t file_id, len;
         if (is_open) { 
             file_id = m->op.u.open.file_id; 
             if (is_shared_open_mode && ns->client_idx != 0) {
@@ -1075,12 +1078,10 @@ void handle_client_wkld_next_rev(
         }
         else if (is_write) { 
             file_id = m->op.u.write.file_id; 
-            off = m->op.u.write.offset;
             len = m->op.u.write.size;
         }
         else { 
             file_id = m->op.u.read.file_id; 
-            off = m->op.u.read.offset;
             len = m->op.u.read.size;
         }
         /* reverse the stats */
@@ -1106,25 +1107,12 @@ void handle_client_wkld_next_rev(
         }
 
         if (io_sim_cli_dist_mode == DIST_MODE_SINGLE){
-            int req_size = (is_write) ? len : 1;
-            // TODO: triton_send_request_rev(req_size, lp, model_net_id);
+            codes_store_send_req_rc(cli_mn_id, lp);
         }
-        else if (is_open) {
-            /* round-robin striping: open is an unconditional net op to all */
-            unsigned int i ;
-            for (i = 0; i < stripe_factor; i++){
-                // TODO: triton_send_request_rev(1, lp, model_net_id);
-            }
-        }
-        else{
-            /* r-r striping: recreate the messages */
-            map_logical_to_physical_objs(stripe_factor, strip_size, off, len, 
-                    req->oid_offs, req->oid_lens);
-            unsigned int i;
-            for (i = 0; i < stripe_factor; i++){
-                if (req->oid_lens[i] > 0){
-                    // TODO: triton_send_request_rev(req->oid_lens[i], lp, model_net_id);
-                }
+        else {
+            for (int i = 0; i < stripe_factor; i++) {
+                if (is_open || req->oid_lens[i] > 0)
+                    codes_store_send_req_rc(cli_mn_id, lp);
             }
         }
 
@@ -1149,25 +1137,27 @@ static void handle_triton_client_recv_ack_rev_wkld(
         triton_client_msg * m,
         tw_lp * lp){
 
+    struct striped_req_id rid = tag_to_striped_req(m->tag);
+
     /* find the operation! */
     struct qlist_head *ent;
     client_req *req;
     qlist_for_each(ent, &ns->ops){
         client_req *tmp = qlist_entry(ent,client_req,ql);
-        // TODO: if (tmp->op_index == m->resp.op_index){
+        if (tmp->op_index == rid.op_index){
             req = tmp;
             break;
-        // TODO: }
+        }
     }
     /* if the item does not exist in the pending ops list, then it must 
      * exist in the completed ops list */
     if (ent == &ns->ops){
         qlist_for_each(ent, &ns->complete_ops){
             client_req *tmp = qlist_entry(ent,client_req,ql);
-            // TODO: if (tmp->op_index == m->resp.op_index){
+            if (tmp->op_index == rid.op_index){
                 req = tmp;
                 break;
-            // TODO: }
+            }
         }
         assert(ent != &ns->complete_ops);
         /* re-add into the pending ops list */
@@ -1175,31 +1165,19 @@ static void handle_triton_client_recv_ack_rev_wkld(
         qlist_add_tail(ent, &ns->ops);
     }
 
-    /* find the oid corresp. to the ack */
-    unsigned int i;
-    /* TODO:
-    for (i = 0; 
-         i < stripe_factor && req->map.oids[i] != m->resp.req.oid;
-         i++);
-    */
-    i = 0;
-    if (i == stripe_factor){
-        tw_error(TW_LOC, "client %d: ack for oid %lu not matched\n",
-                ns->client_idx, 0ul /*TODO: m->resp.req.oid */);
-    }
-    assert(req->status[i] == 0);
+    if (rid.strip == stripe_factor)
+        tw_error(TW_LOC, "client %d: ack in rc not matched\n", ns->client_idx);
+    assert(req->status[rid.strip] == 0);
 
     if (req->status_ct == 0){
-        /* TODO :
-        enum request_type t = m->resp.req.req_type;
         int f;
         for (f = 0; f < ns->num_files && 
                 ns->file_ids[f] != req->map.file_id; f++);
         assert(f < ns->num_files);
-        if (t == REQ_OPEN){
+        if (req->type == CSREQ_OPEN){
             ns->open_times[f] = m->prev_time;
         }
-        else if (t == REQ_WRITE){
+        else if (req->type == CSREQ_WRITE){
             ns->write_times[f] = m->prev_time;
         }
         else{
@@ -1207,15 +1185,14 @@ static void handle_triton_client_recv_ack_rev_wkld(
         }
 
         ns->op_status_ct++;
-        if (is_shared_open_mode && m->resp.req.req_type == REQ_OPEN &&
+        if (is_shared_open_mode && req->type == CSREQ_OPEN &&
                 ns->client_idx == 0)
             enter_barrier_event_rc(lp);
         else
-        */
             handle_client_wkld_next_rev(ns,m,lp);
     }
     req->status_ct++;
-    req->status[i]++;
+    req->status[rid.strip]++;
 }
 
 void handle_triton_client_recv_ack_rev(
@@ -1236,6 +1213,18 @@ void handle_triton_client_recv_ack_rev(
 }
 
 /**** END IMPLEMENTATIONS ****/
+
+static int striped_req_to_tag(int op_index, int strip)
+{
+    return op_index * stripe_factor + strip;
+}
+static struct striped_req_id tag_to_striped_req(int tag)
+{
+    struct striped_req_id rtn;
+    rtn.op_index = tag / stripe_factor;
+    rtn.strip    = tag % stripe_factor;
+    return rtn;
+}
 
 static file_map* get_random_file_id_mapping(
         uint64_t file_id, 
@@ -1282,7 +1271,7 @@ void client_req_destroy(client_req *req){
     free(req);
 }
 
-void enter_barrier_event(int root, int count, tw_lp *lp){
+void enter_barrier_event(int root, int count, int rank, tw_lp *lp){
     tw_event *e = codes_event_new(barrier_lpid,
             codes_local_latency(lp), lp);
     barrier_msg *mb = tw_event_data(e);
@@ -1290,6 +1279,7 @@ void enter_barrier_event(int root, int count, tw_lp *lp){
     mb->src = lp->gid;
     mb->count = count;
     mb->root  = root;
+    mb->rank  = rank;
     tw_event_send(e);
 }
 

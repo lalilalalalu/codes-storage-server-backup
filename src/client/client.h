@@ -10,6 +10,7 @@
 #include <ross.h>
 #include <codes/lp-msg.h>
 #include <codes/codes-workload.h>
+#include <codes/codes-store-lp.h>
 
 extern int triton_client_magic;
 
@@ -29,10 +30,11 @@ enum triton_client_event
 
 struct triton_client_msg {
     msg_header header;
-    /* TODO: triton_io_gresp resp;*/
+    int tag;
+    codes_store_ret_t ret;
 
     /* previous operation index for reverse computation */
-    unsigned long op_index_prev;
+    int op_index_prev;
 
     /* cache for codes workload operations - we need to provide it for 
      * workload reverse computation */

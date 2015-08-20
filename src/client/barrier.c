@@ -153,10 +153,8 @@ void handle_barrier(
         tw_lp * lp){
     struct qlist_head *ent;
     barrier_op *op;
-    // TODO: int rank = get_client_index(m->src);
-    int rank = 0;
 #if BARRIER_DEBUG
-    fprintf(ns->fdbg, "barrier: rank:%d, count:%d, root:%d, event_num:%d\n", rank, m->count, m->root, m->event_num);
+    fprintf(ns->fdbg, "barrier: rank:%d, count:%d, root:%d, event_num:%d\n", m->rank, m->count, m->root, m->event_num);
 #endif
     qlist_for_each(ent, &ns->barrier_ops){
         barrier_op *tmp = qlist_entry(ent,barrier_op,ql);
@@ -176,9 +174,9 @@ void handle_barrier(
     }
 
     /* sanity checks */
-    assert(rank >= op->root && rank < op->root + op->count);
+    assert(m->rank >= op->root && m->rank < op->root + op->count);
 
-    if (op->rank_stats[rank] == 1){
+    if (op->rank_stats[m->rank] == 1){
         char buf[128];
         int written = sprintf(buf, "barrier: too many barrier req from client\n");
         lp_io_write(lp->gid, "errors", written, buf);
@@ -188,7 +186,7 @@ void handle_barrier(
 #endif
         return;
     }
-    /*assert(op->rank_stats[rank] != 1);*/
+    assert(op->rank_stats[m->rank] != 1);
     if (op->checked_in_count >= op->count){
         char buf[128];
         int written = sprintf(buf, "barrier: too many overall reqs\n");
@@ -201,15 +199,18 @@ void handle_barrier(
     }
     /*assert(op->checked_in_count < op->count);*/
 
-    op->rank_stats[rank]++;
-    assert(op->rank_stats[rank] < 2);
+    op->rank_stats[m->rank]++;
+    assert(op->rank_stats[m->rank] < 2);
     op->checked_in_count++;
     
     if (op->checked_in_count == op->count){
         /* done, send all acks back */
         int i;
         for (i = 0; i < op->count; i++){
-            tw_event *e = codes_event_new(-1ul /*TODO: get_client_lpid(op->root+i)*/, 
+            tw_lpid cli_lp =
+                codes_mapping_get_lpid_from_relative(op->root+i, NULL,
+                        CLIENT_LP_NM, NULL, 0);
+            tw_event *e = codes_event_new(cli_lp,
                     codes_local_latency(lp), lp);
             triton_client_msg *m_ack = tw_event_data(e);
             m_ack->header.magic = triton_client_magic;
@@ -217,7 +218,7 @@ void handle_barrier(
             m_ack->header.src = lp->gid;
 #if BARRIER_DEBUG
             fprintf(ns->fdbg, "barrier: acking to cli %d, lp %lu\n", op->root+i,
-                    get_client_lpid(op->root+i));
+                    cli_lp);
             m_ack->event_num = ns->event_num;
 #endif
             tw_event_send(e);
@@ -239,9 +240,8 @@ void handle_barrier_rev(
             break;
         }
     }
-    int rank = 0; /* TODO: get_client_index(m->src); */
 #if BARRIER_DEBUG
-    fprintf(ns->fdbg, "barrier: rank:%d, count:%d, root:%d, event_num:%d REV\n", rank, m->count, m->root, m->event_num);
+    fprintf(ns->fdbg, "barrier: rank:%d, count:%d, root:%d, event_num:%d REV\n", m->rank, m->count, m->root, m->event_num);
 #endif
     if (ent == &ns->barrier_ops){
         /* item was recently removed, re-create */
@@ -257,15 +257,15 @@ void handle_barrier_rev(
             codes_local_latency_reverse(lp);
             op->rank_stats[i] = 1;
         }
-        op->rank_stats[rank-op->root] = 0;
+        op->rank_stats[m->rank-op->root] = 0;
         qlist_add_tail(&op->ql, &ns->barrier_ops);
     }
     else{
         /* undo individual addition */
         assert(op->checked_in_count > 0);
         op->checked_in_count--;
-        op->rank_stats[rank-op->root]--;
-        assert(op->rank_stats[rank-op->root] == 0);
+        op->rank_stats[m->rank-op->root]--;
+        assert(op->rank_stats[m->rank-op->root] == 0);
         if (op->checked_in_count == 0){
             /* remove completely, this is the first barrier */
             free(op->rank_stats);

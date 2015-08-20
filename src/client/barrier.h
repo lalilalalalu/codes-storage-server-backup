@@ -30,9 +30,11 @@ struct barrier_msg {
      * LP id)  */
     tw_lpid src;
 
-    /* count and root of the calling barrier msg */
+    /* count and root of the caller barrier msg */
     int count;
     int root;
+    int rank;
+
     int event_num;
 };
 
