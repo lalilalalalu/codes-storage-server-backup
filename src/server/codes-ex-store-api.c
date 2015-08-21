@@ -15,29 +15,30 @@
 char const * const CODES_EX_STORE_LP_NAME = "codes-external-store";
 
 void codes_ex_store_send_req(
+		int simple_id,
 		int type,
 		uint64_t xfer_size,
-		void const * self_event,
 		int self_event_size,
+		void * self_event,
 		tw_lp * sender)
 {
+    es_mn_id = simple_id;
+
     /* get the external store LP */
+    int prio = 3162; /* a very high number */
     tw_lpid ex_store_lpid = codes_ex_store_get_lpid(0, NULL, 0);
 
-    es_msg * m_out;
-    tw_event * e_local;
-    e_local = codes_event_new(ex_store_lpid, codes_local_latency(sender), sender);
-    m_out = tw_event_data(e_local); 
-    msg_set_header(ces_magic, CES_WRITE, sender->gid, &m_out->h);
+    es_msg m_out;
+    msg_set_header(ces_magic, CES_WRITE, sender->gid, &m_out.h);
 
-    m_out->num_bytes = xfer_size;
-    m_out->self_event_size = self_event_size;
+    m_out.xfer_size = xfer_size;
+    model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
+    (void*) &prio);
 
-    void * m_pt = m_out + 1;
-    if(self_event_size > 0)
-       memcpy(m_pt, self_event, self_event_size);
-       
-    tw_event_send(e_local);
+    model_net_event(simple_id,
+	CODES_EX_STORE_LP_NAME, ex_store_lpid, 
+	xfer_size, 0.0,
+	sizeof(es_msg), &m_out, self_event_size, self_event, sender);
 }
 
 tw_lpid codes_ex_store_get_lpid(

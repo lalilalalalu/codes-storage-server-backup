@@ -18,7 +18,7 @@
 
 #define CHK_LP_NM "test-checkpoint-client"
 
-#define CLIENT_DBG 1
+#define CLIENT_DBG 0
 #define dprintf(_fmt, ...) \
     do {if (CLIENT_DBG) printf(_fmt, __VA_ARGS__);} while (0)
 
@@ -29,7 +29,7 @@ static double app_run_time;
 static double mtti;
 
 static int test_checkpoint_magic;
-static int cli_mn_id;
+static int cli_dfly_id;
 // following is for mapping clients to servers
 static int do_server_mapping = 0;
 static int num_servers;
@@ -101,7 +101,7 @@ static void send_req_to_store(
     else
         dest_server_id = 0;
    
-    codes_store_send_req(&r, dest_server_id, lp, cli_mn_id, CODES_MCTX_DEFAULT,
+    codes_store_send_req(&r, dest_server_id, lp, cli_dfly_id, CODES_MCTX_DEFAULT,
             0, &h, &ns->cb);
 
     dprintf("%lu: sent %s request\n", lp->gid, is_write ? "write" : "read");
@@ -200,14 +200,14 @@ static void next_rc(
       case CODES_WK_READ:
       {
 	ns->num_sent_rd--;
-        codes_store_send_req_rc(cli_mn_id, lp);
+        codes_store_send_req_rc(cli_dfly_id, lp);
       }
       break;
 
       case CODES_WK_WRITE:
       {
          ns->num_sent_wr--;
-         codes_store_send_req_rc(cli_mn_id, lp);
+         codes_store_send_req_rc(cli_dfly_id, lp);
       }
       break;
 
@@ -328,7 +328,7 @@ void test_checkpoint_configure(int model_net_id){
 
     bj_hashlittle2(CHK_LP_NM, strlen(CHK_LP_NM), &h1, &h2);
     test_checkpoint_magic = h1+h2;
-    cli_mn_id = model_net_id;
+    cli_dfly_id = model_net_id;
 
     int rc;
     rc = configuration_get_value_double(&config, "test-checkpoint-client", "checkpoint_sz", NULL,

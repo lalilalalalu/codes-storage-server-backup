@@ -82,6 +82,7 @@ void codes_store_register();
 
 void codes_store_configure(int model_net_id);
 
+void codes_store_set_scnd_net(int second_net_id);
 #endif /* end of include guard: CODES_STORE_LP_H */
 
 /*

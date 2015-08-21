@@ -41,7 +41,8 @@ const tw_optdef app_opt[] = {
 int main(int argc, char * argv[])
 {
     int num_nets, *net_ids;
-    int model_net_id;
+    int dragonfly_net_id;
+    int simple_net_id;
 
     g_tw_ts_end = s_to_ns(60*60*24*365); /* one year, in nsecs */
 
@@ -80,17 +81,19 @@ int main(int argc, char * argv[])
     /* Setup the model-net parameters specified in the global config object,
      * returned is the identifier for the network type */
     net_ids = model_net_configure(&num_nets);
-    assert(num_nets == 1);
-    model_net_id = *net_ids;
+    assert(num_nets == 2);
+    dragonfly_net_id = net_ids[0];
+    simple_net_id = net_ids[1];
     free(net_ids);
 
     /* after the mapping configuration is loaded, let LPs parse the
      * configuration information. This is done so that LPs have access to
      * the codes_mapping interface for getting LP counts and such */
-    codes_store_configure(model_net_id);
+    codes_store_configure(dragonfly_net_id);
+    codes_store_set_scnd_net(simple_net_id);
     resource_lp_configure();
     lsm_configure();
-    test_checkpoint_configure(model_net_id);
+    test_checkpoint_configure(dragonfly_net_id);
 
 
     if (lp_io_dir[0]){
@@ -108,7 +111,8 @@ int main(int argc, char * argv[])
         assert(ret == 0 || !"lp_io_flush failure");
     }
 
-    model_net_report_stats(model_net_id);
+    model_net_report_stats(dragonfly_net_id);
+    model_net_report_stats(simple_net_id);
     tw_end();
     return 0;
 }

@@ -17,6 +17,7 @@
 /**** LP name ****/
 extern char const * const CODES_EX_STORE_LP_NAME;
 int ces_magic;
+int es_mn_id;
 // LP API parameters
 
 enum codes_ex_store_req_type {
@@ -24,26 +25,20 @@ enum codes_ex_store_req_type {
     CES_WRITE_COMPLETE
 };
 
-struct codes_ex_store_req {
-    enum codes_ex_store_req_type type;
-    uint64_t xfer_size; 
-};
-
 typedef struct es_msg
 {
     msg_header h;
-    int num_bytes; /* bytes to be written on backing store */
-    int self_event_size;
-    tw_stime saved_idle_time;
+    int xfer_size;
 } es_msg;
 
 // API functions
 
 void codes_ex_store_send_req(
+		int simple_id,
 		int type,
-		uint64_t xfer_size,
-		void const * self_event,
+		uint64_t msg_size,
 		int self_event_size,
+		void * self_event,	
 		tw_lp * sender);
 
 void codes_ex_store_send_req_rc(tw_lp * sender);

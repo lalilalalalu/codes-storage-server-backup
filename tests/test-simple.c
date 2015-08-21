@@ -40,6 +40,7 @@ int main(int argc, char * argv[])
 {
     int num_nets, *net_ids;
     int model_net_id;
+    int simple_net_id;
 
     g_tw_ts_end = s_to_ns(60*60*24*365); /* one year, in nsecs */
 
@@ -78,14 +79,27 @@ int main(int argc, char * argv[])
     /* Setup the model-net parameters specified in the global config object,
      * returned is the identifier for the network type */
     net_ids = model_net_configure(&num_nets);
-    assert(num_nets == 1);
-    model_net_id = *net_ids;
+    
+    if(net_ids[0] != SIMPLENET)
+       assert(num_nets == 2 && net_ids[1] == SIMPLENET);
+    else
+       assert(num_nets == 1);
+
+    model_net_id = net_ids[0];
+ 
+    if(num_nets == 2)
+       simple_net_id = net_ids[1];
+    
     free(net_ids);
 
     /* after the mapping configuration is loaded, let LPs parse the
      * configuration information. This is done so that LPs have access to
      * the codes_mapping interface for getting LP counts and such */
     codes_store_configure(model_net_id);
+    
+    if(num_nets == 2)
+       codes_store_set_scnd_net(simple_net_id);
+   
     resource_lp_configure();
     lsm_configure();
     test_client_configure(model_net_id);
