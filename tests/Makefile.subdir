@@ -1,8 +1,7 @@
 check_PROGRAMS += tests/test-simple \
 		  tests/test-checkpoint
 
-TESTS += tests/test-simple.sh \
-	 tests/test-checkpoint.sh
+TESTS += tests/test-simple.sh 
 
 tests_test_simple_SOURCES = \
 	tests/test-simple.c \
