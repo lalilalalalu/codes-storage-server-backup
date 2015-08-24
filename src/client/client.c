@@ -45,22 +45,8 @@ static struct codes_cb_info cli_cb;
 static int cli_mn_id;
 
 /* distribution parameters */
-#if 0
-static unsigned int stripe_factor, strip_size; 
-#endif
 
 static tw_lpid barrier_lpid;
-
-/* for mock tests */ 
-#if 0
-static int num_writes_mock = 0;
-static int num_reads_mock  = 0;
-static int mock_is_write;
-static int req_size_mock;
-
-/* for workloads with open - assume the file is shared among ALL clients */
-static int is_shared_open_mode = 0;
-#endif
 
 typedef struct client_req client_req;
 
@@ -253,7 +239,6 @@ static void get_file_id_mapping_rc(
         void (*rng_fn_rc) (void *),
         void * rng_arg,
         int num_rng_calls);
-/*static file_map* get_random_file_id_mapping(uint64_t file_id, unsigned int stripe_factor);*/
 static client_req* client_req_init(unsigned int stripe_factor); 
 static void client_req_destroy(client_req *req);
 static void enter_barrier_event(int count, int root, int rank, tw_lp *lp);
@@ -1282,35 +1267,6 @@ static void get_file_id_mapping_rc(
 
     oid_map_create_striped_random_rc(num_rng_calls, rng_fn_rc, rng_arg);
 }
-
-#if 0
-static file_map* get_random_file_id_mapping(
-        uint64_t file_id, 
-        unsigned int stripe_factor){
-    /* attempt to find an already-generated file id */
-    struct qlist_head *ent;
-    qlist_for_each(ent, &file_map_global){
-        file_map *tmp = qlist_entry(ent,file_map,ql);
-        if (tmp->file_id == file_id){
-            return tmp;
-        }
-    }
-    /* failed, create a new entry */
-    file_map *fm = malloc(sizeof(file_map));
-    fm->oids = malloc(stripe_factor*sizeof(*fm->oids));
-    fm->file_id = file_id;
-    /* make a dummy striped allocation via the placement algorithm 
-     * TODO: we shouldn't have to leak ROSD details (replication factor) here */
-    unsigned int num_objs;
-    unsigned long *sizes_dummy = malloc(stripe_factor*sizeof(*sizes_dummy));
-    /* TODO: placement_create_striped(stripe_factor, replication_factor, stripe_factor,
-            1, &num_objs, fm->oids, sizes_dummy); */
-    assert(num_objs == stripe_factor);
-    free(sizes_dummy);
-    qlist_add_tail(&fm->ql, &file_map_global);
-    return fm;
-}
-#endif
 
 client_req* client_req_init(unsigned int stripe_factor){
     client_req *rtn = malloc(sizeof(client_req));
