@@ -1,3 +1,4 @@
 nobase_include_HEADERS = \
 	codes/codes-store-lp.h \
+	codes/codes-store-client-lp.h \
 	codes/codes-external-store.h

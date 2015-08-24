@@ -4,8 +4,8 @@
  *
  */
 
-#include "barrier.h"
-#include "client.h"
+#include <codes/codes-store-client-barrier-lp.h>
+#include <codes/codes-store-client-lp.h>
 #include <codes/codes_mapping.h>
 #include <codes/lp-type-lookup.h>
 #include <codes/jenkins-hash.h>

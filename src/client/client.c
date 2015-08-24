@@ -15,9 +15,9 @@
 #include <codes/codes-store-lp.h>
 #include <codes/codes-mapping-context.h>
 #include <codes/codes-callback.h>
+#include <codes/codes-store-client-lp.h>
+#include <codes/codes-store-client-barrier-lp.h>
 
-#include "client.h"
-#include "barrier.h"
 #include "io-sim-mode.h"
 #include "dist.h"
 #include "oid-map.h"
