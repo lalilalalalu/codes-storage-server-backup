@@ -32,7 +32,7 @@ static inline double nsec_to_sec(double nsec){ return nsec * 1e-9; }
 
 /**** BEGIN SIMULATION DATA STRUCTURES ****/
 
-int triton_client_magic; /* use this as sanity check on events */
+int cs_client_magic; /* use this as sanity check on events */
 
 /* configuration values */
 static int num_clients;
@@ -70,7 +70,7 @@ struct client_req {
     struct qlist_head ql;
 };
 
-struct triton_client_state {
+struct cs_client_state {
     int client_idx;
     /* TODO: refactor this away from assuming mock testing 
      * once we have multiple generation types */
@@ -127,86 +127,86 @@ struct triton_client_state {
 /**** BEGIN LP, EVENT PROCESSING FUNCTION DECLS ****/
 
 /* ROSS LP processing functions */  
-static void triton_client_lp_init(
-    triton_client_state * ns,
+static void cs_client_lp_init(
+    cs_client_state * ns,
     tw_lp * lp);
-static void triton_client_event_handler(
-    triton_client_state * ns,
+static void cs_client_event_handler(
+    cs_client_state * ns,
     tw_bf * b,
-    triton_client_msg * m,
+    cs_client_msg * m,
     tw_lp * lp);
-static void triton_client_rev_handler(
-    triton_client_state * ns,
+static void cs_client_rev_handler(
+    cs_client_state * ns,
     tw_bf * b,
-    triton_client_msg * m,
+    cs_client_msg * m,
     tw_lp * lp);
-static void triton_client_finalize(
-    triton_client_state * ns,
+static void cs_client_finalize(
+    cs_client_state * ns,
     tw_lp * lp);
 
 /* event type handlers */
-static void handle_triton_client_kickoff(
-    triton_client_state * ns,
+static void handle_cs_client_kickoff(
+    cs_client_state * ns,
     tw_bf * b,
-    triton_client_msg * m,
+    cs_client_msg * m,
     tw_lp * lp);
-static void handle_triton_client_recv_ack(
-    triton_client_state * ns,
+static void handle_cs_client_recv_ack(
+    cs_client_state * ns,
     tw_bf *b,
-    triton_client_msg * m,
+    cs_client_msg * m,
     tw_lp * lp);
 /* NOTE: generating mock requests takes entirely different path than workload
  * acks */
-static void handle_triton_client_recv_ack_mock(
-    triton_client_state * ns,
+static void handle_cs_client_recv_ack_mock(
+    cs_client_state * ns,
     tw_bf * b,
-    triton_client_msg * m,
+    cs_client_msg * m,
     tw_lp * lp);
 static void handle_client_wkld_next(
-    triton_client_state * ns,
+    cs_client_state * ns,
     tw_bf * b,
-    triton_client_msg * m,
+    cs_client_msg * m,
     tw_lp * lp);
-static void handle_triton_client_recv_ack_wkld(
-    triton_client_state * ns,
+static void handle_cs_client_recv_ack_wkld(
+    cs_client_state * ns,
     tw_bf * b,
-    triton_client_msg * m,
+    cs_client_msg * m,
     tw_lp * lp);
-static void handle_triton_client_kickoff_rev(
-    triton_client_state * ns,
+static void handle_cs_client_kickoff_rev(
+    cs_client_state * ns,
     tw_bf * b,
-    triton_client_msg * m,
+    cs_client_msg * m,
     tw_lp * lp);
-static void handle_triton_client_recv_ack_rev(
-    triton_client_state * ns,
+static void handle_cs_client_recv_ack_rev(
+    cs_client_state * ns,
     tw_bf * b,
-    triton_client_msg * m,
+    cs_client_msg * m,
     tw_lp * lp);
-static void handle_triton_client_recv_ack_rev_mock(
-    triton_client_state * ns,
+static void handle_cs_client_recv_ack_rev_mock(
+    cs_client_state * ns,
     tw_bf *b, 
-    triton_client_msg * m,
+    cs_client_msg * m,
     tw_lp * lp);
 static void handle_client_wkld_next_rev(
-        triton_client_state * ns,
+        cs_client_state * ns,
         tw_bf * b,
-        triton_client_msg * m,
+        cs_client_msg * m,
         tw_lp * lp);
-static void handle_triton_client_recv_ack_rev_wkld(
-    triton_client_state * ns,
+static void handle_cs_client_recv_ack_rev_wkld(
+    cs_client_state * ns,
     tw_bf * b,
-    triton_client_msg * m,
+    cs_client_msg * m,
     tw_lp * lp);
 
 /* ROSS function pointer table for this LP */
-tw_lptype triton_client_lp = {
-    (init_f) triton_client_lp_init,
+tw_lptype cs_client_lp = {
+    (init_f) cs_client_lp_init,
     (pre_run_f) NULL,
-    (event_f) triton_client_event_handler,
-    (revent_f) triton_client_rev_handler,
-    (final_f)  triton_client_finalize, 
+    (event_f) cs_client_event_handler,
+    (revent_f) cs_client_rev_handler,
+    (final_f)  cs_client_finalize, 
     (map_f) codes_mapping,
-    sizeof(triton_client_state),
+    sizeof(cs_client_state),
 };
 
 /**** END LP, EVENT PROCESSING FUNCTION DECLS ****/
@@ -226,14 +226,14 @@ static int striped_req_to_tag(int op_index, int strip);
 static struct striped_req_id tag_to_striped_req(int tag);
 
 static file_map* get_file_id_mapping(
-        triton_client_state *ns,
+        cs_client_state *ns,
         tw_bf *b,
         uint64_t file_id,
         uint64_t (*rng_fn)(void *),
         void * rng_arg,
         int *num_rng_calls);
 static void get_file_id_mapping_rc(
-        triton_client_state *ns,
+        cs_client_state *ns,
         tw_bf *b,
         uint64_t file_id,
         void (*rng_fn_rc) (void *),
@@ -246,15 +246,15 @@ static void enter_barrier_event_rc(tw_lp *lp);
 
 /**** BEGIN IMPLEMENTATIONS ****/
 
-void triton_client_register(){
-    lp_type_register(CLIENT_LP_NM, &triton_client_lp);
+void cs_client_register(){
+    lp_type_register(CLIENT_LP_NM, &cs_client_lp);
 }
 
-void triton_client_configure(int model_net_id){
+void cs_client_configure(int model_net_id){
     uint32_t h1=0, h2=0;
 
     bj_hashlittle2(CLIENT_LP_NM, strlen(CLIENT_LP_NM), &h1, &h2);
-    triton_client_magic = h1+h2;
+    cs_client_magic = h1+h2;
 
     // we use two RNGs - one for file id mappings, the other for everything else
     if (g_tw_nRNG_per_lp < 2)
@@ -266,7 +266,7 @@ void triton_client_configure(int model_net_id){
         codes_mapping_get_lp_count(NULL, 0, CODES_STORE_LP_NAME, NULL, 1);
     assert(num_servers > 0);
 
-    INIT_CODES_CB_INFO(&cli_cb, triton_client_msg, header, tag, ret);
+    INIT_CODES_CB_INFO(&cli_cb, cs_client_msg, header, tag, ret);
 
     barrier_lpid = codes_mapping_get_lpid_from_relative(0, NULL, "barrier",
             NULL, 0);
@@ -303,8 +303,8 @@ void triton_client_configure(int model_net_id){
     }
 }
 
-void triton_client_lp_init(
-        triton_client_state * ns,
+void cs_client_lp_init(
+        cs_client_state * ns,
         tw_lp * lp)
 {
     ns->client_idx = codes_mapping_get_lp_relative_id(lp->gid, 0, 0);
@@ -353,8 +353,8 @@ void triton_client_lp_init(
     }
 
     tw_event *e = codes_event_new(lp->gid, codes_local_latency(lp), lp);
-    triton_client_msg *m = tw_event_data(e);
-    msg_set_header(triton_client_magic, TRITON_CLI_KICKOFF, lp->gid, &m->header);
+    cs_client_msg *m = tw_event_data(e);
+    msg_set_header(cs_client_magic, CS_CLI_KICKOFF, lp->gid, &m->header);
     tw_event_send(e);
 
 #if CLIENT_DEBUG
@@ -367,12 +367,12 @@ void triton_client_lp_init(
 #endif
 }
 
-void triton_client_event_handler(
-        triton_client_state * ns,
+void cs_client_event_handler(
+        cs_client_state * ns,
         tw_bf * b,
-        triton_client_msg * m,
+        cs_client_msg * m,
         tw_lp * lp){
-    assert(m->header.magic == triton_client_magic);
+    assert(m->header.magic == cs_client_magic);
     
 #if CLIENT_DEBUG
     fprintf(ns->fdbg, "event num %d\n", ns->event_num);
@@ -383,13 +383,13 @@ void triton_client_event_handler(
     }
 
     switch (m->header.event_type){
-        case TRITON_CLI_KICKOFF:
-            handle_triton_client_kickoff(ns, b, m, lp);
+        case CS_CLI_KICKOFF:
+            handle_cs_client_kickoff(ns, b, m, lp);
             break;
-        case TRITON_CLI_RECV_ACK:
-            handle_triton_client_recv_ack(ns, b, m, lp);
+        case CS_CLI_RECV_ACK:
+            handle_cs_client_recv_ack(ns, b, m, lp);
             break;
-        case TRITON_CLI_WKLD_CONTINUE:
+        case CS_CLI_WKLD_CONTINUE:
             /* proceed immediately to workload processing */
 #if CLIENT_DEBUG
             fprintf(ns->fdbg, "lp %lu got continue\n", lp->gid);
@@ -398,7 +398,7 @@ void triton_client_event_handler(
             handle_client_wkld_next(ns, b, m, lp);
             break;
         default:
-            assert(!"triton_client event type not known");
+            assert(!"cs_client event type not known");
             break;
     }
 #if CLIENT_DEBUG
@@ -406,12 +406,12 @@ void triton_client_event_handler(
 #endif
 }
 
-void triton_client_rev_handler(
-        triton_client_state * ns,
+void cs_client_rev_handler(
+        cs_client_state * ns,
         tw_bf * b,
-        triton_client_msg * m,
+        cs_client_msg * m,
         tw_lp * lp){
-    assert(m->header.magic == triton_client_magic);
+    assert(m->header.magic == cs_client_magic);
 
     if (ns->error_ct > 0){
         ns->error_ct--;
@@ -425,24 +425,24 @@ void triton_client_rev_handler(
     }
 
     switch (m->header.event_type){
-        case TRITON_CLI_KICKOFF:
-            handle_triton_client_kickoff_rev(ns, b, m, lp);
+        case CS_CLI_KICKOFF:
+            handle_cs_client_kickoff_rev(ns, b, m, lp);
             break;
-        case TRITON_CLI_RECV_ACK:
-            handle_triton_client_recv_ack_rev(ns, b, m, lp);
+        case CS_CLI_RECV_ACK:
+            handle_cs_client_recv_ack_rev(ns, b, m, lp);
             break;
-        case TRITON_CLI_WKLD_CONTINUE:
+        case CS_CLI_WKLD_CONTINUE:
             /* proceed immediately to workload processing */
             handle_client_wkld_next_rev(ns, b, m, lp);
             break;
         default:
-            assert(!"triton_client event type not known");
+            assert(!"cs_client event type not known");
             break;
     }
 }
 
-void triton_client_finalize(
-        triton_client_state * ns,
+void cs_client_finalize(
+        cs_client_state * ns,
         tw_lp * lp){
     int i, written = 0;
     char *buf = malloc(1<<20);
@@ -491,10 +491,10 @@ void triton_client_finalize(
 }
 
 /* event type handlers */
-void handle_triton_client_kickoff(
-        triton_client_state * ns,
+void handle_cs_client_kickoff(
+        cs_client_state * ns,
         tw_bf *b,
-        triton_client_msg * m,
+        cs_client_msg * m,
         tw_lp * lp){
     switch(cli_config.req_mode){
         case REQ_MODE_MOCK:
@@ -503,7 +503,7 @@ void handle_triton_client_kickoff(
             m->ret = CODES_STORE_OK;
             ns->reqs_remaining++;
             ns->op_status_ct++;
-            handle_triton_client_recv_ack_mock(ns,b,m,lp);
+            handle_cs_client_recv_ack_mock(ns,b,m,lp);
             break;
         case REQ_MODE_WKLD:
             handle_client_wkld_next(ns,b,m,lp);
@@ -513,10 +513,10 @@ void handle_triton_client_kickoff(
     }
 }
 
-void handle_triton_client_recv_ack_mock(
-        triton_client_state * ns,
+void handle_cs_client_recv_ack_mock(
+        cs_client_state * ns,
         tw_bf *b,
-        triton_client_msg * m,
+        cs_client_msg * m,
         tw_lp * lp){
 
     /* decrement on receipt rather than on send */
@@ -543,7 +543,7 @@ void handle_triton_client_recv_ack_mock(
 
         msg_header h;
         struct codes_store_request r;
-        msg_set_header(triton_client_magic, TRITON_CLI_RECV_ACK, lp->gid, &h);
+        msg_set_header(cs_client_magic, CS_CLI_RECV_ACK, lp->gid, &h);
         codes_store_init_req(cli_config.req_cfg.u.mock.is_write
                 ? CSREQ_WRITE : CSREQ_READ,
                 0, oid, 0, cli_config.req_cfg.u.mock.req_size, &r);
@@ -561,9 +561,9 @@ void handle_triton_client_recv_ack_mock(
 }
 
 void handle_client_wkld_next(
-        triton_client_state * ns,
+        cs_client_state * ns,
         tw_bf *b,
-        triton_client_msg * m,
+        cs_client_msg * m,
         tw_lp * lp){
     /* process the next request */
     struct codes_workload_op op;
@@ -602,7 +602,7 @@ void handle_client_wkld_next(
 
         msg_header h;
         struct codes_store_request r;
-        msg_set_header(triton_client_magic, TRITON_CLI_RECV_ACK, lp->gid, &h);
+        msg_set_header(cs_client_magic, CS_CLI_RECV_ACK, lp->gid, &h);
         m->op_index_prev = ns->op_index_current;
 
         uint64_t file_id, off, len;
@@ -770,9 +770,9 @@ void handle_client_wkld_next(
             sec_to_nsec(op.u.delay.seconds) : 0.0;
         tw_event *e = codes_event_new(lp->gid, 
                 codes_local_latency(lp)+delay, lp);
-        triton_client_msg *m_next = tw_event_data(e);
+        cs_client_msg *m_next = tw_event_data(e);
         *m_next = *m;
-        m_next->header.event_type = TRITON_CLI_WKLD_CONTINUE;
+        m_next->header.event_type = CS_CLI_WKLD_CONTINUE;
         tw_event_send(e);
     }
     else if (op.op_type == CODES_WK_BARRIER){
@@ -790,17 +790,17 @@ void handle_client_wkld_next(
         */
         tw_event *e = codes_event_new(lp->gid,
                 codes_local_latency(lp), lp);
-        triton_client_msg *m_next = tw_event_data(e);
+        cs_client_msg *m_next = tw_event_data(e);
         *m_next = *m;
-        m_next->header.event_type = TRITON_CLI_WKLD_CONTINUE;
+        m_next->header.event_type = CS_CLI_WKLD_CONTINUE;
         tw_event_send(e);
     }
 }
 
-void handle_triton_client_recv_ack_wkld(
-        triton_client_state * ns,
+void handle_cs_client_recv_ack_wkld(
+        cs_client_state * ns,
         tw_bf * b,
-        triton_client_msg * m,
+        cs_client_msg * m,
         tw_lp * lp){
 #if CLIENT_DEBUG
     fprintf(ns->fdbg, "client recv ack\n");
@@ -915,36 +915,36 @@ void handle_triton_client_recv_ack_wkld(
     }
 }
 
-void handle_triton_client_recv_ack(
-        triton_client_state * ns,
+void handle_cs_client_recv_ack(
+        cs_client_state * ns,
         tw_bf * b,
-        triton_client_msg * m,
+        cs_client_msg * m,
         tw_lp * lp){
 
     assert(m->ret == CODES_STORE_OK);
 
     switch(cli_config.req_mode){
         case REQ_MODE_MOCK:
-            handle_triton_client_recv_ack_mock(ns,b,m,lp);
+            handle_cs_client_recv_ack_mock(ns,b,m,lp);
             break;
         case REQ_MODE_WKLD:
-            handle_triton_client_recv_ack_wkld(ns,b,m,lp);
+            handle_cs_client_recv_ack_wkld(ns,b,m,lp);
             break;
         default:
             assert(!"unexpected or uninitialized client request mode");
     }
 }
 
-void handle_triton_client_kickoff_rev(
-        triton_client_state * ns,
+void handle_cs_client_kickoff_rev(
+        cs_client_state * ns,
         tw_bf * b,
-        triton_client_msg * m,
+        cs_client_msg * m,
         tw_lp * lp){
     /* anti-cheat ;) see forward handler */
     switch(cli_config.req_mode){
         case REQ_MODE_MOCK:
             ns->reqs_remaining--;
-            handle_triton_client_recv_ack_rev_mock(ns,b,m,lp);
+            handle_cs_client_recv_ack_rev_mock(ns,b,m,lp);
             break;
         case REQ_MODE_WKLD:
             handle_client_wkld_next_rev(ns,b,m,lp);
@@ -954,10 +954,10 @@ void handle_triton_client_kickoff_rev(
     }
 }
 
-void handle_triton_client_recv_ack_rev_mock(
-        triton_client_state * ns,
+void handle_cs_client_recv_ack_rev_mock(
+        cs_client_state * ns,
         tw_bf * b,
-        triton_client_msg * m,
+        cs_client_msg * m,
         tw_lp * lp){
     if (ns->reqs_remaining == 0) {
         if (cli_config.oid_gen_mode == GEN_MODE_RANDOM){
@@ -971,9 +971,9 @@ void handle_triton_client_recv_ack_rev_mock(
 }
 
 void handle_client_wkld_next_rev(
-        triton_client_state * ns,
+        cs_client_state * ns,
         tw_bf * b,
-        triton_client_msg * m,
+        cs_client_msg * m,
         tw_lp * lp){
     codes_workload_get_next_rc(ns->wkld_id, 0, ns->client_idx, &m->op);
 #if CLIENT_DEBUG
@@ -1083,10 +1083,10 @@ void handle_client_wkld_next_rev(
         codes_local_latency_reverse(lp);
     }
 }
-static void handle_triton_client_recv_ack_rev_wkld(
-        triton_client_state * ns,
+static void handle_cs_client_recv_ack_rev_wkld(
+        cs_client_state * ns,
         tw_bf * b,
-        triton_client_msg * m,
+        cs_client_msg * m,
         tw_lp * lp){
 
     struct striped_req_id rid = tag_to_striped_req(m->tag);
@@ -1147,18 +1147,18 @@ static void handle_triton_client_recv_ack_rev_wkld(
     req->status[rid.strip]++;
 }
 
-void handle_triton_client_recv_ack_rev(
-        triton_client_state * ns,
+void handle_cs_client_recv_ack_rev(
+        cs_client_state * ns,
         tw_bf * b,
-        triton_client_msg * m,
+        cs_client_msg * m,
         tw_lp * lp){
     switch(cli_config.req_mode){
         case REQ_MODE_MOCK:
             ns->reqs_remaining--;
-            handle_triton_client_recv_ack_rev_mock(ns,b,m,lp);
+            handle_cs_client_recv_ack_rev_mock(ns,b,m,lp);
             break;
         case REQ_MODE_WKLD:
-            handle_triton_client_recv_ack_rev_wkld(ns,b,m,lp);
+            handle_cs_client_recv_ack_rev_wkld(ns,b,m,lp);
             break;
         default:
             tw_error(TW_LOC, "unexpected or uninitialized client request mode");
@@ -1189,7 +1189,7 @@ static struct striped_req_id tag_to_striped_req(int tag)
 }
 
 static file_map* get_file_id_mapping(
-        triton_client_state *ns,
+        cs_client_state *ns,
         tw_bf *b,
         uint64_t file_id,
         uint64_t (*rng_fn)(void *),
@@ -1245,7 +1245,7 @@ static file_map* get_file_id_mapping(
 }
 
 static void get_file_id_mapping_rc(
-        triton_client_state *ns,
+        cs_client_state *ns,
         tw_bf *b,
         uint64_t file_id,
         void (*rng_fn_rc) (void *),

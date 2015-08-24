@@ -4,8 +4,8 @@
  *
  */
 
-#ifndef BARRIER_H
-#define BARRIER_H
+#ifndef CODES_STORE_CLIENT_BARRIER_LP_H
+#define CODES_STORE_CLIENT_BARRIER_LP_H
 
 /* this is an LP to simplify barrier workload processing for clients. All clients
  * directly contact this LP and, when all involved have checked in, this LP
@@ -44,7 +44,7 @@ struct barrier_op {
     uint8_t *rank_stats; 
     struct qlist_head ql;
 };
-#endif /* end of include guard: BARRIER_H */
+#endif /* end of include guard: CODES_STORE_CLIENT_BARRIER_LP_H */
 
 
 /*

@@ -212,9 +212,9 @@ void handle_barrier(
                         CLIENT_LP_NM, NULL, 0);
             tw_event *e = codes_event_new(cli_lp,
                     codes_local_latency(lp), lp);
-            triton_client_msg *m_ack = tw_event_data(e);
-            m_ack->header.magic = triton_client_magic;
-            m_ack->header.event_type = TRITON_CLI_WKLD_CONTINUE;
+            cs_client_msg *m_ack = tw_event_data(e);
+            m_ack->header.magic = cs_client_magic;
+            m_ack->header.event_type = CS_CLI_WKLD_CONTINUE;
             m_ack->header.src = lp->gid;
 #if BARRIER_DEBUG
             fprintf(ns->fdbg, "barrier: acking to cli %d, lp %lu\n", op->root+i,

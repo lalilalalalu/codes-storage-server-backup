@@ -4,31 +4,31 @@
  *
  */
 
-#ifndef CLIENT_H
-#define CLIENT_H
+#ifndef CODES_STORE_CLIENT_LP_H
+#define CODES_STORE_CLIENT_LP_H
 
 #include <ross.h>
 #include <codes/lp-msg.h>
 #include <codes/codes-workload.h>
 #include <codes/codes-store-lp.h>
 
-extern int triton_client_magic;
+extern int cs_client_magic;
 
 extern char const * const CLIENT_LP_NM;
 
 /* rosd needs to know client msg types, so expose here */ 
-typedef struct triton_client_state triton_client_state;
-typedef struct triton_client_msg triton_client_msg;
+typedef struct cs_client_state cs_client_state;
+typedef struct cs_client_msg cs_client_msg;
 
 /* event types */
-enum triton_client_event
+enum cs_client_event
 {
-    TRITON_CLI_KICKOFF = 10,
-    TRITON_CLI_RECV_ACK,
-    TRITON_CLI_WKLD_CONTINUE,
+    CS_CLI_KICKOFF = 10,
+    CS_CLI_RECV_ACK,
+    CS_CLI_WKLD_CONTINUE,
 };
 
-struct triton_client_msg {
+struct cs_client_msg {
     msg_header header;
     int tag;
     codes_store_ret_t ret;
@@ -49,18 +49,12 @@ struct triton_client_msg {
     int event_num;
 };
 
-void triton_client_init(
-        int client_count,
-        int server_count,
-        char * wkld_type,
-        char * wkld_params);
-
 /* registers the lp type with ross */
-void triton_client_register();
+void cs_client_register();
 /* configures the lp given the global config object */
-void triton_client_configure();
+void cs_client_configure(int model_net_id);
 
-#endif /* end of include guard: CLIENT_H */
+#endif /* end of include guard: CODES_STORE_CLIENT_LP_H */
 
 
 /*
