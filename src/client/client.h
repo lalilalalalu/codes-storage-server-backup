@@ -36,6 +36,9 @@ struct triton_client_msg {
     /* previous operation index for reverse computation */
     int op_index_prev;
 
+    /* number of rng calls made to oid_map_create_stiped_random */
+    int num_rng_calls;
+
     /* cache for codes workload operations - we need to provide it for 
      * workload reverse computation */
     struct codes_workload_op op;

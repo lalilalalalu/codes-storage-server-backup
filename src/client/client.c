@@ -20,6 +20,7 @@
 #include "barrier.h"
 #include "io-sim-mode.h"
 #include "dist.h"
+#include "oid-map.h"
 
 #define CLIENT_DEBUG 0
 #define MAX_FILE_CT 100
@@ -32,14 +33,26 @@ static inline double nsec_to_sec(double nsec){ return nsec * 1e-9; }
 /**** BEGIN SIMULATION DATA STRUCTURES ****/
 
 int triton_client_magic; /* use this as sanity check on events */
+
+/* configuration values */
 static int num_clients;
+static int num_servers;
+static struct io_sim_config cli_config;
+static struct oid_map *oid_map_method;
+// codes-store callback
+static struct codes_cb_info cli_cb;
+// modelnet id
+static int cli_mn_id;
 
 /* distribution parameters */
+#if 0
 static unsigned int stripe_factor, strip_size; 
+#endif
 
 static tw_lpid barrier_lpid;
 
 /* for mock tests */ 
+#if 0
 static int num_writes_mock = 0;
 static int num_reads_mock  = 0;
 static int mock_is_write;
@@ -47,13 +60,7 @@ static int req_size_mock;
 
 /* for workloads with open - assume the file is shared among ALL clients */
 static int is_shared_open_mode = 0;
-
-static int cli_mn_id;
-
-/* workload-specific parameters */
-static codes_workload_config_return wkld_cfg;
-
-static struct codes_cb_info cli_cb;
+#endif
 
 typedef struct client_req client_req;
 
@@ -67,7 +74,7 @@ typedef struct file_map {
 static struct qlist_head file_map_global;
 
 struct client_req {
-    file_map map;
+    file_map *map;
     uint64_t *oid_offs, *oid_lens;
     int *status;
     int status_ct;
@@ -94,6 +101,12 @@ struct triton_client_state {
     struct qlist_head ops;
 
     int op_index_current;
+
+    // for PLC_MODE_LOCAL, the local server this LP will be communicating with
+    int server_idx_local;
+
+    // list of mappings of file ids to oids
+    struct qlist_head file_id_mappings;
 
     /* currently, we just push completed ops into here. We need a way of doing
      * our own cleanup after GVT */
@@ -148,44 +161,54 @@ static void triton_client_finalize(
 /* event type handlers */
 static void handle_triton_client_kickoff(
     triton_client_state * ns,
+    tw_bf * b,
     triton_client_msg * m,
     tw_lp * lp);
 static void handle_triton_client_recv_ack(
     triton_client_state * ns,
+    tw_bf *b,
     triton_client_msg * m,
     tw_lp * lp);
 /* NOTE: generating mock requests takes entirely different path than workload
  * acks */
 static void handle_triton_client_recv_ack_mock(
     triton_client_state * ns,
+    tw_bf * b,
     triton_client_msg * m,
     tw_lp * lp);
 static void handle_client_wkld_next(
     triton_client_state * ns,
+    tw_bf * b,
     triton_client_msg * m,
     tw_lp * lp);
 static void handle_triton_client_recv_ack_wkld(
     triton_client_state * ns,
+    tw_bf * b,
     triton_client_msg * m,
     tw_lp * lp);
 static void handle_triton_client_kickoff_rev(
     triton_client_state * ns,
+    tw_bf * b,
     triton_client_msg * m,
     tw_lp * lp);
 static void handle_triton_client_recv_ack_rev(
     triton_client_state * ns,
+    tw_bf * b,
     triton_client_msg * m,
     tw_lp * lp);
 static void handle_triton_client_recv_ack_rev_mock(
     triton_client_state * ns,
+    tw_bf *b, 
     triton_client_msg * m,
     tw_lp * lp);
 static void handle_client_wkld_next_rev(
         triton_client_state * ns,
+        tw_bf * b,
         triton_client_msg * m,
         tw_lp * lp);
 static void handle_triton_client_recv_ack_rev_wkld(
     triton_client_state * ns,
+    tw_bf * b,
     triton_client_msg * m,
     tw_lp * lp);
 
@@ -209,10 +232,28 @@ struct striped_req_id
     int op_index;
     int strip;
 };
+
+/* wrapper for tw random calls for oid_map_create_stripe_random */
+static uint64_t tw_rand_u64(void *s /* <-- tw_rng_stream* */);
+static void tw_rand_u64_rc(void *s /* <-- tw_rng_stream* */);
 static int striped_req_to_tag(int op_index, int strip);
 static struct striped_req_id tag_to_striped_req(int tag);
 
-static file_map* get_random_file_id_mapping(uint64_t file_id, unsigned int stripe_factor);
+static file_map* get_file_id_mapping(
+        triton_client_state *ns,
+        tw_bf *b,
+        uint64_t file_id,
+        uint64_t (*rng_fn)(void *),
+        void * rng_arg,
+        int *num_rng_calls);
+static void get_file_id_mapping_rc(
+        triton_client_state *ns,
+        tw_bf *b,
+        uint64_t file_id,
+        void (*rng_fn_rc) (void *),
+        void * rng_arg,
+        int num_rng_calls);
+/*static file_map* get_random_file_id_mapping(uint64_t file_id, unsigned int stripe_factor);*/
 static client_req* client_req_init(unsigned int stripe_factor); 
 static void client_req_destroy(client_req *req);
 static void enter_barrier_event(int count, int root, int rank, tw_lp *lp);
@@ -230,8 +271,15 @@ void triton_client_configure(int model_net_id){
     bj_hashlittle2(CLIENT_LP_NM, strlen(CLIENT_LP_NM), &h1, &h2);
     triton_client_magic = h1+h2;
 
+    // we use two RNGs - one for file id mappings, the other for everything else
+    if (g_tw_nRNG_per_lp < 2)
+        g_tw_nRNG_per_lp++;
+
     num_clients = codes_mapping_get_lp_count(NULL, 0, CLIENT_LP_NM, NULL, 1);
     assert(num_clients>0);
+    num_servers =
+        codes_mapping_get_lp_count(NULL, 0, CODES_STORE_LP_NAME, NULL, 1);
+    assert(num_servers > 0);
 
     INIT_CODES_CB_INFO(&cli_cb, triton_client_msg, header, tag, ret);
 
@@ -240,137 +288,69 @@ void triton_client_configure(int model_net_id){
 
     cli_mn_id = model_net_id;
 
-    char val[MAX_NAME_LENGTH];
-    int rc;
-    /* read in request mode */
-    rc = configuration_get_value(&config, CLIENT_LP_NM, "req_mode", NULL,
-            val, MAX_NAME_LENGTH);
-    assert(rc>0);
-    if (strncmp(val, "mock", 8) == 0){
-        int rc2;
-        /* read the mock workload params */
-        io_sim_cli_req_mode = REQ_MODE_MOCK;
-        rc = configuration_get_value_int(&config, "mock", 
-                "num_writes", NULL, &num_writes_mock);
-        rc2 = configuration_get_value_int(&config, "mock",
-                "num_reads", NULL, &num_reads_mock);
-        if (rc != 0 && rc2 != 0) {
-            tw_error(TW_LOC, "Expected mock:num_writes or mock:num_reads\n");
-        }
-        else if (rc == 0 && rc2 == 0) {
-            tw_error(TW_LOC, "Expected mock:num_writes or mock:num_reads "
-                    "(not both!)\n");
-        }
-        else if (rc == 0) {
-            assert(num_writes_mock > 0);
-            mock_is_write = 1;
-        }
-        else {
-            assert(num_reads_mock > 0);
-            mock_is_write = 0;
-        }
-        rc = configuration_get_value_int(&config, "mock", 
-                "req_size", NULL, &req_size_mock);
-        assert(rc==0 && req_size_mock > 0);
-    }
-    else if (strncmp(val, "workload", 8) == 0){
-        io_sim_cli_req_mode = REQ_MODE_WKLD;
-        wkld_cfg = codes_workload_read_config(&config, "workload");
-    }
-    else{
-        fprintf(stderr, 
-                "unknown mode for triton_client:req_mode config entry\n");
-        abort();
-    }
-    /* read OID mapping mode */
-    rc = configuration_get_value(&config, CLIENT_LP_NM, "map_mode", NULL,
-            val, MAX_NAME_LENGTH);
-    assert(rc>0);
-    if (strncmp(val, "zero", 4) == 0){
-        io_sim_cli_oid_map_mode = MAP_MODE_ZERO;
-    }
-    else if (strncmp(val, "random_persist", 12) == 0){
-        io_sim_cli_oid_map_mode = MAP_MODE_RANDOM_PERSIST;
-    }
-    else if (strncmp(val, "random", 6) == 0){
-        io_sim_cli_oid_map_mode = MAP_MODE_RANDOM;
-    }
-    else if (strncmp(val, "file_id_hash", 12) == 0){
-        io_sim_cli_oid_map_mode = MAP_MODE_WKLD_HASH;
-    }
-    else if (strncmp(val, "file_id", 7) == 0){
-        io_sim_cli_oid_map_mode = MAP_MODE_WKLD_FILE_ID;
-    }
-    else {
-        fprintf(stderr, 
-                "unknown mode for triton_client:map_mode config entry\n");
-        abort();
-    }
-    /* read striping mode */
-    rc = configuration_get_value(&config, CLIENT_LP_NM, "stripe_mode", NULL,
-            val, MAX_NAME_LENGTH);
-    assert(rc>0);
-    if (strncmp(val, "single", 6) == 0){
-        io_sim_cli_dist_mode = DIST_MODE_SINGLE;
-        stripe_factor = 1;
-    }
-    else if (strncmp(val, "rr", 2) == 0){
-        io_sim_cli_dist_mode = DIST_MODE_RR;
-        /* read additional parameters currently colocated with the triton 
-         * client */
-        rc = configuration_get_value_uint(&config, CLIENT_LP_NM, 
-                "stripe_factor_rr", NULL, &stripe_factor);
-        assert(rc==0);
-        rc = configuration_get_value_uint(&config, CLIENT_LP_NM, 
-                "strip_size_rr", NULL, &strip_size);
-        assert(rc==0);
-    }
-    else{
-        fprintf(stderr, 
-                "unknown mode for triton_client:stripe_mode config entry\n");
-        abort();
-    }
+    io_sim_read_config(&config, CLIENT_LP_NM, &cli_config);
 
-    /* read file open mode (don't care about value, existence -> yes)
-     * optional - absence -> no */
-    rc = configuration_get_value_int(&config, CLIENT_LP_NM,
-            "shared_object_mode", NULL, &is_shared_open_mode);
+    assert(is_sim_mode_init(&cli_config) && is_valid_sim_config(&cli_config));
 
     /* initialize file_id->oid mapping */
-    if (io_sim_cli_oid_map_mode == MAP_MODE_RANDOM_PERSIST){
+    if (cli_config.oid_gen_mode == GEN_MODE_RANDOM_PERSIST){
        INIT_QLIST_HEAD(&file_map_global); 
+    }
+    else if (cli_config.oid_gen_mode == GEN_MODE_PLACEMENT) {
+        switch(cli_config.placement_mode) {
+            case PLC_MODE_UNINIT:
+                assert(0);
+                oid_map_method = NULL;
+                break;
+            case PLC_MODE_ZERO:
+                oid_map_method = oid_map_create_zero();
+                break;
+            case PLC_MODE_BINNED:
+                oid_map_method = oid_map_create_bin(num_servers);
+                break;
+            case PLC_MODE_MOD:
+                oid_map_method = oid_map_create_mod(num_servers);
+                break;
+            case PLC_MODE_LOCAL:
+                tw_error(TW_LOC, "not yet supported...\n");
+                return;
+        }
     }
 }
 
 void triton_client_lp_init(
         triton_client_state * ns,
-        tw_lp * lp){
-
-    ns->reqs_remaining = mock_is_write ? num_writes_mock : num_reads_mock;
+        tw_lp * lp)
+{
     ns->client_idx = codes_mapping_get_lp_relative_id(lp->gid, 0, 0);
-    ns->error_ct = 0;
-#if CLIENT_DEBUG
-    ns->event_num = 0;
-    char val[64];
-    sprintf(val, "client.log.%d", ns->client_idx);
-    ns->fdbg = fopen(val, "w");
-    setvbuf(ns->fdbg, NULL, _IONBF, 0);
-    assert(ns->fdbg);
-#endif
 
-    /* initialize workload if in workload mode */
-    if (io_sim_cli_req_mode == REQ_MODE_WKLD){
+    // initialize the RNG to the *same state*
+    // TODO: configure a seed value or use an out of range lpid
+    tw_rand_initial_seed(lp->rng, 0);
+
+    struct io_sim_cli_req_cfg *c = &cli_config.req_cfg;
+    if (cli_config.req_mode == REQ_MODE_MOCK) {
+        ns->reqs_remaining = c->u.mock.is_write
+            ? c->u.mock.num_writes
+            : c->u.mock.num_reads;
+        ns->wkld_id = -1;
+        ns->wkld_done = -1;
+    }
+    else {
         ns->wkld_done = 0;
-        ns->wkld_id = codes_workload_load(wkld_cfg.type, wkld_cfg.params, 0, ns->client_idx);
+        ns->wkld_id = codes_workload_load(c->u.wkld.cfg.type,
+                c->u.wkld.cfg.params, 0, ns->client_idx);
         if (ns->wkld_id == -1){
             tw_error(TW_LOC, "client %d (LP %lu) unable to load workload\n",
                     ns->client_idx, lp->gid);
         }
-    }
-    else{
-        ns->wkld_id = -1;
+        ns->reqs_remaining = 0;
     }
 
+    // TODO:
+    ns->server_idx_local = 0;
+
+    ns->error_ct = 0;
     ns->op_status_ct = 0;
     ns->op_index_current = 0;
     INIT_QLIST_HEAD(&ns->ops);
@@ -391,6 +371,15 @@ void triton_client_lp_init(
     triton_client_msg *m = tw_event_data(e);
     msg_set_header(triton_client_magic, TRITON_CLI_KICKOFF, lp->gid, &m->header);
     tw_event_send(e);
+
+#if CLIENT_DEBUG
+    ns->event_num = 0;
+    char val[64];
+    sprintf(val, "client.log.%d", ns->client_idx);
+    ns->fdbg = fopen(val, "w");
+    setvbuf(ns->fdbg, NULL, _IONBF, 0);
+    assert(ns->fdbg);
+#endif
 }
 
 void triton_client_event_handler(
@@ -410,10 +399,10 @@ void triton_client_event_handler(
 
     switch (m->header.event_type){
         case TRITON_CLI_KICKOFF:
-            handle_triton_client_kickoff(ns, m, lp);
+            handle_triton_client_kickoff(ns, b, m, lp);
             break;
         case TRITON_CLI_RECV_ACK:
-            handle_triton_client_recv_ack(ns, m, lp);
+            handle_triton_client_recv_ack(ns, b, m, lp);
             break;
         case TRITON_CLI_WKLD_CONTINUE:
             /* proceed immediately to workload processing */
@@ -421,7 +410,7 @@ void triton_client_event_handler(
             fprintf(ns->fdbg, "lp %lu got continue\n", lp->gid);
 #endif
             ns->op_status_ct--;
-            handle_client_wkld_next(ns, m, lp);
+            handle_client_wkld_next(ns, b, m, lp);
             break;
         default:
             assert(!"triton_client event type not known");
@@ -452,14 +441,14 @@ void triton_client_rev_handler(
 
     switch (m->header.event_type){
         case TRITON_CLI_KICKOFF:
-            handle_triton_client_kickoff_rev(ns, m, lp);
+            handle_triton_client_kickoff_rev(ns, b, m, lp);
             break;
         case TRITON_CLI_RECV_ACK:
-            handle_triton_client_recv_ack_rev(ns, m, lp);
+            handle_triton_client_recv_ack_rev(ns, b, m, lp);
             break;
         case TRITON_CLI_WKLD_CONTINUE:
             /* proceed immediately to workload processing */
-            handle_client_wkld_next_rev(ns, m, lp);
+            handle_client_wkld_next_rev(ns, b, m, lp);
             break;
         default:
             assert(!"triton_client event type not known");
@@ -519,19 +508,20 @@ void triton_client_finalize(
 /* event type handlers */
 void handle_triton_client_kickoff(
         triton_client_state * ns,
+        tw_bf *b,
         triton_client_msg * m,
         tw_lp * lp){
-    switch(io_sim_cli_req_mode){
+    switch(cli_config.req_mode){
         case REQ_MODE_MOCK:
             /* cheat: inc remaining requests and process a fake success ack
              * - acks events generate new requests */
             m->ret = CODES_STORE_OK;
             ns->reqs_remaining++;
             ns->op_status_ct++;
-            handle_triton_client_recv_ack_mock(ns,m,lp);
+            handle_triton_client_recv_ack_mock(ns,b,m,lp);
             break;
         case REQ_MODE_WKLD:
-            handle_client_wkld_next(ns,m,lp);
+            handle_client_wkld_next(ns,b,m,lp);
             break;
         default:
             tw_error(TW_LOC, "unexpected or uninitialized request mode");
@@ -540,6 +530,7 @@ void handle_triton_client_kickoff(
 
 void handle_triton_client_recv_ack_mock(
         triton_client_state * ns,
+        tw_bf *b,
         triton_client_msg * m,
         tw_lp * lp){
 
@@ -550,14 +541,17 @@ void handle_triton_client_recv_ack_mock(
     if(ns->reqs_remaining > 0){
         /* compute dest oid and server */
         uint64_t oid;
-        switch (io_sim_cli_oid_map_mode){
-            case MAP_MODE_RANDOM:
-                /* TODO: proper oid RNG (ROSS boils down to an fp) */
-                oid = (uint64_t)(tw_rand_unif(lp->rng)*(double)UINT64_MAX);
+        switch (cli_config.oid_gen_mode){
+            case GEN_MODE_RANDOM:
+                oid = (uint64_t)(tw_rand_unif(&lp->rng[1])*(double)UINT64_MAX);
                 break;
-            case MAP_MODE_ZERO:
+            case GEN_MODE_ZERO:
                 oid = 0;
                 break;
+            case GEN_MODE_PLACEMENT:
+                // TODO
+                assert(0);
+                return;
             default:
                 assert(!"unexpected or unitialized mapping mode");
         }
@@ -565,13 +559,15 @@ void handle_triton_client_recv_ack_mock(
         msg_header h;
         struct codes_store_request r;
         msg_set_header(triton_client_magic, TRITON_CLI_RECV_ACK, lp->gid, &h);
-        codes_store_init_req(mock_is_write ? CSREQ_WRITE : CSREQ_READ,
-                0, oid, 0, req_size_mock, &r);
+        codes_store_init_req(cli_config.req_cfg.u.mock.is_write
+                ? CSREQ_WRITE : CSREQ_READ,
+                0, oid, 0, cli_config.req_cfg.u.mock.req_size, &r);
 
+        // TODO - compute server id
         codes_store_send_req(&r, 0, lp, cli_mn_id, CODES_MCTX_DEFAULT, 0, &h,
                 &cli_cb);
 
-        ns->op_status_ct ++;
+        ns->op_status_ct++;
 
 #if CLIENT_DEBUG && 0
         fprintf(ns->fdbg, "LP %lu sending req for oid %lu to srv %lu\n", lp->gid, oid, srv_lp);
@@ -581,6 +577,7 @@ void handle_triton_client_recv_ack_mock(
 
 void handle_client_wkld_next(
         triton_client_state * ns,
+        tw_bf *b,
         triton_client_msg * m,
         tw_lp * lp){
     /* process the next request */
@@ -603,7 +600,7 @@ void handle_client_wkld_next(
 
 #if CLIENT_DEBUG
     codes_workload_print_op(ns->fdbg, &op, 0, ns->client_idx);
-#endif 
+#endif
     if (op.op_type == CODES_WK_END){
         /* workload finished */
         ns->wkld_done = 1;
@@ -616,7 +613,7 @@ void handle_client_wkld_next(
              op.op_type == CODES_WK_WRITE){
         int is_open = op.op_type == CODES_WK_OPEN;
         int is_write= op.op_type == CODES_WK_WRITE;
-        /* operations that create an ROSD request across the network */
+        /* operations that create a codes-store request across the network */
 
         msg_header h;
         struct codes_store_request r;
@@ -630,7 +627,7 @@ void handle_client_wkld_next(
             len = 1;
             /* NON-ROOT (rank 0) processes - if in shared file mode go
              * immediately into the barrier */
-            if (is_shared_open_mode && ns->client_idx != 0) {
+            if (cli_config.open_mode == OPEN_MODE_SHARED && ns->client_idx != 0) {
                 /* current implementation - contact the sentinel barrier LP
                  * directly, without going through the network */
                 enter_barrier_event(0, num_clients, ns->client_idx, lp);
@@ -702,7 +699,7 @@ void handle_client_wkld_next(
         }
 
         /* initialize the queue item we'll be adding */
-        client_req *req = client_req_init(stripe_factor);
+        client_req *req = client_req_init(cli_config.dist_cfg.stripe_factor);
         req->op_index = ns->op_index_current;
         req->issue_time = tw_now(lp);
         req->type = r.type;
@@ -713,120 +710,72 @@ void handle_client_wkld_next(
         /* generate the oids. Via the stripe_factor=1 trick, this logic is the
          * same regardless of striping, but it will likely change later 
          * NOTE: for the persistent random case, we have a dedicated function */
-        unsigned int i;
-        if (io_sim_cli_oid_map_mode != MAP_MODE_RANDOM_PERSIST){
-            req->map.file_id = file_id; 
-            req->map.oids = malloc(stripe_factor*sizeof(req->map.oids)); 
-            for (i = 0; i < stripe_factor; i++){
-                switch(io_sim_cli_oid_map_mode){
-                    case MAP_MODE_ZERO:
+        if (cli_config.oid_gen_mode == GEN_MODE_PLACEMENT_RANDOM ||
+                cli_config.oid_gen_mode == GEN_MODE_PLACEMENT) {
+            req->map = get_file_id_mapping(ns, b, file_id, tw_rand_u64, lp->rng,
+                    &m->num_rng_calls);
+        }
+        else {
+            req->map->file_id = file_id; 
+            req->map->oids =
+                malloc(cli_config.dist_cfg.stripe_factor*sizeof(req->map->oids));
+            for (int i = 0; i < cli_config.dist_cfg.stripe_factor; i++){
+                switch(cli_config.oid_gen_mode){
+                    case GEN_MODE_ZERO:
                         assert(i==0); /* can't be called with striping */
-                        req->map.oids[i] = 0; 
+                        req->map->oids[i] = 0; 
                         break;
-                    case MAP_MODE_WKLD_FILE_ID:
-                        req->map.oids[i] = file_id + i;
+                    case GEN_MODE_WKLD_FILE_ID:
+                        req->map->oids[i] = file_id + i;
                         break;
-                    case MAP_MODE_WKLD_HASH: ;
+                    case GEN_MODE_WKLD_HASH: ;
                         uint64_t file_id_strip = file_id + i;
                         uint32_t h1 = 0, h2 = 0;
                         bj_hashlittle2(&file_id_strip, sizeof(uint64_t), &h1, &h2);
-                        req->map.oids[i] = (((uint64_t)h1)<<32ull) | ((uint64_t)h2); 
+                        req->map->oids[i] = (((uint64_t)h1)<<32ull) | ((uint64_t)h2); 
                         break;
                     default:
-                        tw_error(TW_LOC, "bad map mode for striped request workload");
+                        tw_error(TW_LOC,
+                                "bad map mode for striped request workload");
                 }
             }
-        }
-        else{
-            req->map = *get_random_file_id_mapping(file_id, stripe_factor); 
         }
 
-        int srv; unsigned long srv_l;
-        if (io_sim_cli_dist_mode == DIST_MODE_SINGLE){
-            /* prepare the message to a single oid */
-            switch(io_sim_cli_oid_map_mode){
-                case MAP_MODE_ZERO:
-                    srv = 0;
-                    break;
-                case MAP_MODE_WKLD_FILE_ID:
-                case MAP_MODE_WKLD_HASH:
-                    // TODO: placement_find_closest(req->map.oids[0],1,&srv_l);
-                    // TODO: srv = srv_l;
-                    srv = 0;
-                    break;
-                case MAP_MODE_RANDOM_PERSIST:
-                    req->map = *get_random_file_id_mapping(file_id, 1);
-                    break;
-                default:
-                    tw_error(TW_LOC, "bad map mode for non-striped request");
+        if (cli_config.dist_mode == DIST_MODE_SINGLE) {
+            req->oid_offs[0] = off;
+            req->oid_lens[0] = len;
+        }
+        else
+            map_logical_to_physical_objs(cli_config.dist_cfg.stripe_factor,
+                    cli_config.dist_cfg.strip_size, off, len,
+                    req->oid_offs, req->oid_lens);
+
+        MN_START_SEQ();
+        r.xfer_offset = 0;
+        r.xfer_size = 0;
+        for (int i = 0; i < cli_config.dist_cfg.stripe_factor; i++) {
+            r.oid = req->map->oids[i];
+            if (req->oid_lens[i] != 0) {
+                r.xfer_offset = req->oid_offs[i];
+                r.xfer_size   = req->oid_lens[i];
             }
-            r.xfer_offset  = off;
-            r.xfer_size    = len;
-            r.oid = req->map.oids[0];
-            // TODO: calculate server index
-            codes_store_send_req(&r, srv, lp, cli_mn_id,
-                    CODES_MCTX_DEFAULT,
+            else if (!is_open)
+                continue;
+
+            codes_store_send_req(&r, oid_map_lookup(r.oid, oid_map_method),
+                    lp, cli_mn_id, CODES_MCTX_DEFAULT,
                     striped_req_to_tag(ns->op_index_current, 0), &h, &cli_cb);
             req->status_ct++;
-            req->status[0]++;
-#if CLIENT_DEBUG && TODO
-            unsigned long rosd_ul = 0;
-            /* TODO: placement_find_closest(mr.req.oid, 1, &rosd_ul);*/
-            /* TODO: tw_lpid rosd_lp = get_rosd_lpid(rosd_ul);*/
-            fprintf(ns->fdbg,
-                    "LP %lu sending req for oid %lu to srv %lu\n",
-                    lp->gid, req->map.oids[0], rosd_lp);
-#endif
-        }
-        else{
-            /* generate the requests */
-            if (!is_open){
-                map_logical_to_physical_objs(stripe_factor, strip_size, off, 
-                        len, req->oid_offs, req->oid_lens);
-            }
-            MN_START_SEQ();
-            for (i = 0; i < stripe_factor; i++){
-                r.oid = req->map.oids[i];
-                if (is_open){
-                    req->status_ct++;
-                    req->status[i]++;
-                    r.xfer_size = 1;
-                    // TODO: compute server id
-                    codes_store_send_req(&r, 0, lp, cli_mn_id,
-                            CODES_MCTX_DEFAULT,
-                            striped_req_to_tag(ns->op_index_current, i),
-                            &h, &cli_cb);
+            req->status[i]++;
 #if CLIENT_DEBUG
-                    unsigned long rosd_ul = 0;
-                    /* TODO: placement_find_closest(mr.req.oid, 1, &rosd_ul); */
-                    /* TODO: tw_lpid rosd_lp = get_rosd_lpid(rosd_ul);*/
-                    fprintf(ns->fdbg,
-                            "LP %lu sending req for oid %lu to srv %lu\n",
-                            lp->gid, req->map.oids[i], rosd_lp);
+            fprintf(ns->fdbg,
+                    "LP %lu sending req for oid %lu to srv %d\n",
+                    lp->gid, req->map->oids[i],
+                    oid_map_lookup(r.oid, oid_map_method));
 #endif
-                }
-                else if (req->oid_lens[i] > 0){
-                    req->status_ct++;
-                    req->status[i]++;
-                    r.xfer_offset = req->oid_offs[i];
-                    r.xfer_size   = req->oid_lens[i];
-                    // TODO: compute server id
-                    codes_store_send_req(&r, 0, lp, cli_mn_id,
-                            CODES_MCTX_DEFAULT,
-                            striped_req_to_tag(ns->op_index_current, i),
-                            &h, &cli_cb);
-#if CLIENT_DEBUG && TODO
-                    unsigned long rosd_ul;
-                    // TODO: placement_find_closest(mr.req.oid, 1, &rosd_ul);
-                    // TODO: tw_lpid rosd_lp = get_rosd_lpid(rosd_ul);
-                    fprintf(ns->fdbg,
-                            "LP %lu sending req for oid %lu to srv %lu, size %lu\n",
-                            lp->gid, req->map.oids[i], rosd_lp, mr.req.xfer_size);
-#endif
-                }
-            }
-            MN_END_SEQ();
         }
+        MN_END_SEQ();
+
         // in either case, update the opid
         ns->op_index_current++;
     }
@@ -865,6 +814,7 @@ void handle_client_wkld_next(
 
 void handle_triton_client_recv_ack_wkld(
         triton_client_state * ns,
+        tw_bf * b,
         triton_client_msg * m,
         tw_lp * lp){
 #if CLIENT_DEBUG
@@ -941,7 +891,7 @@ void handle_triton_client_recv_ack_wkld(
         // find the corresponding stats
         int f;
         for (f = 0; f < ns->num_files && 
-                ns->file_ids[f] != req->map.file_id; f++);
+                ns->file_ids[f] != req->map->file_id; f++);
         assert(f < ns->num_files);
         if (req->type == CSREQ_OPEN){
             m->prev_time = ns->open_times[f];
@@ -965,15 +915,15 @@ void handle_triton_client_recv_ack_wkld(
 
 
         ns->op_status_ct--;
-        if (is_shared_open_mode && req->type == CSREQ_OPEN &&
-                ns->client_idx == 0) {
+        if (cli_config.open_mode == OPEN_MODE_SHARED &&
+                req->type == CSREQ_OPEN && ns->client_idx == 0) {
             // current implementation - contact the sentinel barrier LP
             // directly, without going through the network
             enter_barrier_event(0, num_clients, ns->client_idx, lp);
             return;
         }
         else
-            handle_client_wkld_next(ns, m, lp);
+            handle_client_wkld_next(ns, b, m, lp);
         /* move the entry to the completed q */
         qlist_del(ent);
         qlist_add_tail(ent, &ns->complete_ops);
@@ -982,17 +932,18 @@ void handle_triton_client_recv_ack_wkld(
 
 void handle_triton_client_recv_ack(
         triton_client_state * ns,
+        tw_bf * b,
         triton_client_msg * m,
         tw_lp * lp){
 
     assert(m->ret == CODES_STORE_OK);
 
-    switch(io_sim_cli_req_mode){
+    switch(cli_config.req_mode){
         case REQ_MODE_MOCK:
-            handle_triton_client_recv_ack_mock(ns,m,lp);
+            handle_triton_client_recv_ack_mock(ns,b,m,lp);
             break;
         case REQ_MODE_WKLD:
-            handle_triton_client_recv_ack_wkld(ns,m,lp);
+            handle_triton_client_recv_ack_wkld(ns,b,m,lp);
             break;
         default:
             assert(!"unexpected or uninitialized client request mode");
@@ -1001,16 +952,17 @@ void handle_triton_client_recv_ack(
 
 void handle_triton_client_kickoff_rev(
         triton_client_state * ns,
+        tw_bf * b,
         triton_client_msg * m,
         tw_lp * lp){
     /* anti-cheat ;) see forward handler */
-    switch(io_sim_cli_req_mode){
+    switch(cli_config.req_mode){
         case REQ_MODE_MOCK:
             ns->reqs_remaining--;
-            handle_triton_client_recv_ack_rev_mock(ns,m,lp);
+            handle_triton_client_recv_ack_rev_mock(ns,b,m,lp);
             break;
         case REQ_MODE_WKLD:
-            handle_client_wkld_next_rev(ns,m,lp);
+            handle_client_wkld_next_rev(ns,b,m,lp);
             break;
         default:
             tw_error(TW_LOC, "unexpected or uninitialized request mode");
@@ -1019,17 +971,23 @@ void handle_triton_client_kickoff_rev(
 
 void handle_triton_client_recv_ack_rev_mock(
         triton_client_state * ns,
+        tw_bf * b,
         triton_client_msg * m,
         tw_lp * lp){
-    ns->reqs_remaining++;
-    codes_store_send_req_rc(cli_mn_id, lp);
-    if (io_sim_cli_oid_map_mode == MAP_MODE_RANDOM){
-        tw_rand_reverse_unif(lp->rng);
+    if (ns->reqs_remaining == 0) {
+        if (cli_config.oid_gen_mode == GEN_MODE_RANDOM){
+            tw_rand_reverse_unif(lp->rng);
+        }
+        codes_store_send_req_rc(cli_mn_id, lp);
+        ns->op_status_ct--;
     }
+    ns->reqs_remaining++;
+    ns->op_status_ct++;
 }
 
 void handle_client_wkld_next_rev(
         triton_client_state * ns,
+        tw_bf * b,
         triton_client_msg * m,
         tw_lp * lp){
     codes_workload_get_next_rc(ns->wkld_id, 0, ns->client_idx, &m->op);
@@ -1064,7 +1022,8 @@ void handle_client_wkld_next_rev(
         uint64_t file_id, len;
         if (is_open) { 
             file_id = m->op.u.open.file_id; 
-            if (is_shared_open_mode && ns->client_idx != 0) {
+            if (cli_config.open_mode == OPEN_MODE_SHARED &&
+                    ns->client_idx != 0) {
                 enter_barrier_event_rc(lp);
                 /* undo the file stat addition */
                 int f;
@@ -1106,11 +1065,18 @@ void handle_client_wkld_next_rev(
             ns->read_count[fpos]--;
         }
 
-        if (io_sim_cli_dist_mode == DIST_MODE_SINGLE){
+        if (cli_config.oid_gen_mode == GEN_MODE_PLACEMENT_RANDOM ||
+                cli_config.oid_gen_mode == GEN_MODE_PLACEMENT)
+            get_file_id_mapping_rc(ns, b, file_id, tw_rand_u64_rc, lp->rng,
+                    m->num_rng_calls);
+        else
+            free(req->map->oids);
+
+        if (cli_config.dist_mode == DIST_MODE_SINGLE){
             codes_store_send_req_rc(cli_mn_id, lp);
         }
         else {
-            for (int i = 0; i < stripe_factor; i++) {
+            for (int i = 0; i < cli_config.dist_cfg.stripe_factor; i++) {
                 if (is_open || req->oid_lens[i] > 0)
                     codes_store_send_req_rc(cli_mn_id, lp);
             }
@@ -1134,6 +1100,7 @@ void handle_client_wkld_next_rev(
 }
 static void handle_triton_client_recv_ack_rev_wkld(
         triton_client_state * ns,
+        tw_bf * b,
         triton_client_msg * m,
         tw_lp * lp){
 
@@ -1165,14 +1132,14 @@ static void handle_triton_client_recv_ack_rev_wkld(
         qlist_add_tail(ent, &ns->ops);
     }
 
-    if (rid.strip == stripe_factor)
+    if (rid.strip == cli_config.dist_cfg.stripe_factor)
         tw_error(TW_LOC, "client %d: ack in rc not matched\n", ns->client_idx);
     assert(req->status[rid.strip] == 0);
 
     if (req->status_ct == 0){
         int f;
         for (f = 0; f < ns->num_files && 
-                ns->file_ids[f] != req->map.file_id; f++);
+                ns->file_ids[f] != req->map->file_id; f++);
         assert(f < ns->num_files);
         if (req->type == CSREQ_OPEN){
             ns->open_times[f] = m->prev_time;
@@ -1185,11 +1152,11 @@ static void handle_triton_client_recv_ack_rev_wkld(
         }
 
         ns->op_status_ct++;
-        if (is_shared_open_mode && req->type == CSREQ_OPEN &&
-                ns->client_idx == 0)
+        if (cli_config.open_mode == OPEN_MODE_SHARED &&
+                req->type == CSREQ_OPEN && ns->client_idx == 0)
             enter_barrier_event_rc(lp);
         else
-            handle_client_wkld_next_rev(ns,m,lp);
+            handle_client_wkld_next_rev(ns,b,m,lp);
     }
     req->status_ct++;
     req->status[rid.strip]++;
@@ -1197,15 +1164,16 @@ static void handle_triton_client_recv_ack_rev_wkld(
 
 void handle_triton_client_recv_ack_rev(
         triton_client_state * ns,
+        tw_bf * b,
         triton_client_msg * m,
         tw_lp * lp){
-    switch(io_sim_cli_req_mode){
+    switch(cli_config.req_mode){
         case REQ_MODE_MOCK:
             ns->reqs_remaining--;
-            handle_triton_client_recv_ack_rev_mock(ns,m,lp);
+            handle_triton_client_recv_ack_rev_mock(ns,b,m,lp);
             break;
         case REQ_MODE_WKLD:
-            handle_triton_client_recv_ack_rev_wkld(ns,m,lp);
+            handle_triton_client_recv_ack_rev_wkld(ns,b,m,lp);
             break;
         default:
             tw_error(TW_LOC, "unexpected or uninitialized client request mode");
@@ -1214,18 +1182,108 @@ void handle_triton_client_recv_ack_rev(
 
 /**** END IMPLEMENTATIONS ****/
 
+static uint64_t tw_rand_u64(void *s /* <-- tw_rng_stream* */)
+{
+    return tw_rand_ulong(s, 0, ULONG_MAX);
+}
+static void tw_rand_u64_rc(void *s /* <-- tw_rng_stream* */)
+{
+    tw_rand_reverse_unif(s);
+}
+
 static int striped_req_to_tag(int op_index, int strip)
 {
-    return op_index * stripe_factor + strip;
+    return op_index * cli_config.dist_cfg.stripe_factor + strip;
 }
 static struct striped_req_id tag_to_striped_req(int tag)
 {
     struct striped_req_id rtn;
-    rtn.op_index = tag / stripe_factor;
-    rtn.strip    = tag % stripe_factor;
+    rtn.op_index = tag / cli_config.dist_cfg.stripe_factor;
+    rtn.strip    = tag % cli_config.dist_cfg.stripe_factor;
     return rtn;
 }
 
+static file_map* get_file_id_mapping(
+        triton_client_state *ns,
+        tw_bf *b,
+        uint64_t file_id,
+        uint64_t (*rng_fn)(void *),
+        void * rng_arg,
+        int *num_rng_calls)
+{
+    /* attempt to find an already-generated file id */
+    struct qlist_head *ent;
+    qlist_for_each(ent, &ns->file_id_mappings){
+        file_map *tmp = qlist_entry(ent,file_map,ql);
+        if (tmp->file_id == file_id){
+            *num_rng_calls = 0;
+            return tmp;
+        }
+        b->c0 = 1;
+    }
+
+    file_map *fm = malloc(sizeof(file_map));
+    fm->oids = malloc(cli_config.dist_cfg.stripe_factor*sizeof(*fm->oids));
+    assert(fm->oids);
+    fm->file_id = file_id;
+
+    int start_svr, end_svr;
+    uint64_t (*rfn)(void *);
+    void * rarg;
+    if (cli_config.placement_mode == PLC_MODE_LOCAL) {
+        start_svr = ns->server_idx_local;
+        end_svr   = ns->server_idx_local + 1;
+        rfn = NULL;
+        rarg = NULL;
+    }
+    else {
+        start_svr = 0;
+        end_svr = num_servers;
+        if (cli_config.oid_gen_mode == GEN_MODE_PLACEMENT) {
+            rfn = NULL;
+            rarg = NULL;
+        }
+        else {
+            rfn = rng_fn;
+            rarg = rng_arg;
+        }
+    }
+    *num_rng_calls =
+        oid_map_create_striped_random(cli_config.dist_cfg.stripe_factor,
+                start_svr, end_svr, fm->oids, rfn, rarg,
+                oid_map_method);
+    if (*num_rng_calls == -1)
+        tw_error(TW_LOC,
+                "client id %d: unable to create oid mapping\n",
+                ns->client_idx);
+    return fm;
+}
+
+static void get_file_id_mapping_rc(
+        triton_client_state *ns,
+        tw_bf *b,
+        uint64_t file_id,
+        void (*rng_fn_rc) (void *),
+        void * rng_arg,
+        int num_rng_calls)
+{
+    if (!b->c0) {
+        struct qlist_head *ent;
+        qlist_for_each(ent, &ns->file_id_mappings) {
+            file_map *tmp = qlist_entry(ent, file_map, ql);
+            if (tmp->file_id == file_id) {
+                qlist_del(ent);
+                free(tmp->oids);
+                free(tmp);
+                break;
+            }
+        }
+    }
+
+    oid_map_create_striped_random_rc(num_rng_calls, rng_fn_rc, rng_arg);
+}
+
+#if 0
 static file_map* get_random_file_id_mapping(
         uint64_t file_id, 
         unsigned int stripe_factor){
@@ -1252,6 +1310,7 @@ static file_map* get_random_file_id_mapping(
     qlist_add_tail(&fm->ql, &file_map_global);
     return fm;
 }
+#endif
 
 client_req* client_req_init(unsigned int stripe_factor){
     client_req *rtn = malloc(sizeof(client_req));
