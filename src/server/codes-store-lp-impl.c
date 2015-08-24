@@ -277,28 +277,21 @@ static void codes_store_send_resp(
         struct codes_mctx const * cli_mctx,
         tw_lp *lp)
 {
+    SANITY_CHECK_CB(&p->info, codes_store_ret_t);
+
     // i'm a terrible person for using VLAs and everyone should know it
     char data[p->info.event_size];
 
-    tw_lpid cli_lp = p->h.src;
+    GET_INIT_CB_PTRS(p, data, lp->gid, h, tag, cli_rc, codes_store_ret_t);
 
-    msg_header *h = (msg_header*)(data + p->info.header_offset);
-    *h = p->h;
-    h->src = lp->gid;
-
-    int *tag = (int*)(data + p->info.tag_offset);
-    *tag = p->tag;
-
-    codes_store_ret_t *cli_rc  =
-        (codes_store_ret_t*)(data + p->info.cb_ret_offset);
     *cli_rc = rc;
 
     int prio = 0;
     model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
             (void*) &prio);
-    
+
     model_net_event_mctx(mn_id, CODES_STORE_LP_MCTX, cli_mctx,
-            CODES_STORE_LP_NAME, cli_lp, CS_REQ_CONTROL_SZ, 0.0,
+            CODES_STORE_LP_NAME, p->h.src, CS_REQ_CONTROL_SZ, 0.0,
             p->info.event_size, data, 0, NULL, lp);
 }
 
