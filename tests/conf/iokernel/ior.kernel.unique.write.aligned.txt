@@ -1,0 +1,46 @@
+g = 1;
+r = getgrouprank g;
+s = getgroupsize g;
+o = 0;
+
+f = 13;
+open f;
+
+o = 0;
+writeat f, 4194304, o;
+o = (4194304 * 1);
+writeat f, 4194304, o;
+o = (4194304 * 2);
+writeat f, 4194304, o;
+o = (4194304 * 3);
+writeat f, 4194304, o;
+o = (4194304 * 4);
+writeat f, 4194304, o;
+o = (4194304 * 5);
+writeat f, 4194304, o;
+o = (4194304 * 6);
+writeat f, 4194304, o;
+o = (4194304 * 7);
+writeat f, 4194304, o;
+o = (4194304 * 8);
+writeat f, 4194304, o;
+o = (4194304 * 9);
+writeat f, 4194304, o;
+o = (4194304 * 10);
+writeat f, 4194304, o;
+o = (4194304 * 11);
+writeat f, 4194304, o;
+o = (4194304 * 12);
+writeat f, 4194304, o;
+o = (4194304 * 13);
+writeat f, 4194304, o;
+o = (4194304 * 14);
+writeat f, 4194304, o;
+o = (4194304 * 15);
+writeat f, 4194304, o;
+
+sync g;
+
+close f;
+
+exit 0;
