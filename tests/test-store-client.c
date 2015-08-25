@@ -14,8 +14,8 @@
 
 #include <codes/codes-store-lp.h>
 #include <codes/codes-external-store.h>
-
-#include "test-client.h"
+#include <codes/codes-store-client-lp.h>
+#include <codes/codes-store-client-barrier-lp.h>
 
 static tw_stime s_to_ns(tw_stime s)
 {
@@ -39,8 +39,8 @@ const tw_optdef app_opt[] = {
 int main(int argc, char * argv[])
 {
     int num_nets, *net_ids;
-    int model_net_id;
-    int simple_net_id;
+    int client_server_mn_id;
+    int server_exstore_mn_id;
 
     g_tw_ts_end = s_to_ns(60*60*24*365); /* one year, in nsecs */
 
@@ -66,9 +66,10 @@ int main(int argc, char * argv[])
     lsm_register();
     codes_store_register();
     resource_lp_init();
-    test_client_register();
     codes_ex_store_register();
     model_net_register();
+    cs_client_register();
+    barrier_register();
 
     /* Setup takes the global config object, the registered LPs, and 
      * generates/places the LPs as specified in the configuration file. 
@@ -79,31 +80,20 @@ int main(int argc, char * argv[])
     /* Setup the model-net parameters specified in the global config object,
      * returned is the identifier for the network type */
     net_ids = model_net_configure(&num_nets);
-    
-    if(net_ids[0] != SIMPLENET)
-       assert(num_nets == 2 && net_ids[1] == SIMPLENET);
-    else
-       assert(num_nets == 1);
-
-    model_net_id = net_ids[0];
- 
-    if(num_nets == 2)
-       simple_net_id = net_ids[1];
-    
-    free(net_ids);
 
     /* after the mapping configuration is loaded, let LPs parse the
      * configuration information. This is done so that LPs have access to
      * the codes_mapping interface for getting LP counts and such */
-    codes_store_configure(model_net_id);
-    
+    codes_store_configure(net_ids[0]);
+
     if(num_nets == 2)
-       codes_store_set_scnd_net(simple_net_id);
-   
+       codes_store_set_scnd_net(net_ids[1]);
+
     resource_lp_configure();
     lsm_configure();
-    test_client_configure(model_net_id);
+    cs_client_configure(net_ids[0]);
 
+    free(net_ids);
 
     if (lp_io_dir[0]){
         do_lp_io = 1;
