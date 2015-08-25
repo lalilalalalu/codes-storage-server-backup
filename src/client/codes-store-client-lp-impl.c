@@ -273,7 +273,7 @@ void cs_client_configure(int model_net_id){
 
     cli_mn_id = model_net_id;
 
-    io_sim_read_config(&config, CLIENT_LP_NM, &cli_config);
+    io_sim_read_config(&config, CLIENT_LP_NM, NULL, num_clients, &cli_config);
 
     assert(is_sim_mode_init(&cli_config) && is_valid_sim_config(&cli_config));
 

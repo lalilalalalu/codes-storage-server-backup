@@ -127,6 +127,8 @@ void print_sim_modes(FILE *f, struct io_sim_config const * c);
 void io_sim_read_config(
         ConfigHandle *handle,
         char const * section_name,
+        char const * annotation,
+        int num_ranks,
         struct io_sim_config *cfg);
 
 /* an uninitialized state is an error state */

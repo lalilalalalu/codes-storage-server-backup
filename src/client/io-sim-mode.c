@@ -34,12 +34,14 @@ void print_sim_modes(FILE *f, struct io_sim_config const * c){
 void io_sim_read_config(
         ConfigHandle *handle,
         char const * section_name,
+        char const * annotation,
+        int num_ranks,
         struct io_sim_config *cfg)
 {
     char val[CONFIGURATION_MAX_NAME];
     int rc;
 
-    rc = configuration_get_value(handle, section_name, "req_mode", NULL,
+    rc = configuration_get_value(handle, section_name, "req_mode", annotation,
             val, CONFIGURATION_MAX_NAME);
     assert(rc>0);
     if (strncmp(val, "mock", 4) == 0){
@@ -48,9 +50,9 @@ void io_sim_read_config(
         /* read the mock workload params */
         cfg->req_mode = REQ_MODE_MOCK;
         rc = configuration_get_value_int(handle, "mock", 
-                "num_mock_writes", NULL, &r->u.mock.num_writes);
+                "num_mock_writes", annotation, &r->u.mock.num_writes);
         rc2 = configuration_get_value_int(handle, "mock",
-                "num_mock_reads", NULL, &r->u.mock.num_reads);
+                "num_mock_reads", annotation, &r->u.mock.num_reads);
         if (rc != 0 && rc2 != 0) {
             tw_error(TW_LOC, "Expected %s:num_mock_writes or %s:num_mock_reads\n",
                     section_name, section_name);
@@ -70,13 +72,14 @@ void io_sim_read_config(
             r->u.mock.is_write = 0;
         }
         rc = configuration_get_value_int(handle, section_name, 
-                "mock_req_size", NULL, &r->u.mock.req_size);
+                "mock_req_size", annotation, &r->u.mock.req_size);
         assert(rc==0 && r->u.mock.req_size > 0);
     }
     else if (strncmp(val, "workload", 8) == 0){
         cfg->req_mode = REQ_MODE_WKLD;
         cfg->req_cfg.u.wkld.cfg =
-            codes_workload_read_config(handle, section_name);
+            codes_workload_read_config(handle, section_name, annotation,
+                    num_ranks);
     }
     else{
         fprintf(stderr, "unknown mode for %s:req_mode config entry\n",
@@ -84,8 +87,8 @@ void io_sim_read_config(
         abort();
     }
 
-    rc = configuration_get_value(handle, section_name, "oid_gen_mode", NULL,
-            val, CONFIGURATION_MAX_NAME);
+    rc = configuration_get_value(handle, section_name, "oid_gen_mode",
+            annotation, val, CONFIGURATION_MAX_NAME);
     assert(rc>0);
     if (strncmp(val, "zero", 4) == 0)
         cfg->oid_gen_mode = GEN_MODE_ZERO;
@@ -155,7 +158,7 @@ void io_sim_read_config(
      * optional - absence -> no */
     int is_shared_open_mode = 0;
     configuration_get_value_int(&config, section_name,
-            "shared_object_mode", NULL, &is_shared_open_mode);
+            "shared_object_mode", annotation, &is_shared_open_mode);
     if (is_shared_open_mode)
         cfg->open_mode = OPEN_MODE_SHARED;
     else
