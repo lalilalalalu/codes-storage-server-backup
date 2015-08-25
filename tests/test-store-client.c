@@ -39,8 +39,6 @@ const tw_optdef app_opt[] = {
 int main(int argc, char * argv[])
 {
     int num_nets, *net_ids;
-    int client_server_mn_id;
-    int server_exstore_mn_id;
 
     g_tw_ts_end = s_to_ns(60*60*24*365); /* one year, in nsecs */
 
@@ -93,8 +91,6 @@ int main(int argc, char * argv[])
     lsm_configure();
     cs_client_configure(net_ids[0]);
 
-    free(net_ids);
-
     if (lp_io_dir[0]){
         do_lp_io = 1;
         /* initialize lp io */
@@ -110,7 +106,8 @@ int main(int argc, char * argv[])
         assert(ret == 0 || !"lp_io_flush failure");
     }
 
-    model_net_report_stats(model_net_id);
+    model_net_report_stats(net_ids[0]);
+    free(net_ids);
     tw_end();
     return 0;
 }
