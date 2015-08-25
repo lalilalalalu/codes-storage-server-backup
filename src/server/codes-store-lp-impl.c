@@ -470,7 +470,7 @@ void handle_recv_cli_req(
             || m->req.type == CSREQ_CREATE) {
         int is_create = m->req.type == CSREQ_CREATE;
 
-        int meta_tag = -make_tag(qi->op_id, 0);
+        int tag = make_tag(qi->op_id, 0);
 
         msg_header h_cb;
         msg_set_header(cs_magic, CS_COMPLETE_DISK_OP, lp->gid, &h_cb);
@@ -480,7 +480,7 @@ void handle_recv_cli_req(
 
         lsm_io_event(CODES_STORE_LP_NAME, qi->req.oid, 0, 0,
                 is_create ? LSM_WRITE_REQUEST : LSM_READ_REQUEST,
-                0.0, lp, CODES_MCTX_DEFAULT, meta_tag, &h_cb, &cb_lsm);
+                0.0, lp, CODES_MCTX_DEFAULT, tag, &h_cb, &cb_lsm);
     }
     else {
         qi->preq = cs_pipeline_init(num_threads, pipeline_unit_size,
@@ -854,11 +854,7 @@ static void handle_complete_disk_op(
         msg_header const * h,
         struct ev_complete_disk_op * m,
         tw_lp * lp){
-    cs_callback_id id;
-    if (m->tag < 0)
-        id = make_cb_id(-m->tag);
-    else
-        id = make_cb_id(m->tag);
+    cs_callback_id id = make_cb_id(m->tag);
 
     // find the pipeline op
     struct qlist_head *ent = NULL;
@@ -879,7 +875,7 @@ static void handle_complete_disk_op(
         return;
     }
 
-    if (m->tag < 0) {
+    if (qi->req.type == CSREQ_OPEN || qi->req.type == CSREQ_CREATE) {
         codes_store_send_resp(CODES_STORE_OK, &qi->cli_cb, &qi->cli_mctx, lp);
         qlist_del(&qi->ql);
         rc_stack_push(lp, qi, free_qitem, ns->finished_ops);
@@ -1280,11 +1276,7 @@ static void handle_complete_disk_op_rc(
         struct ev_complete_disk_op * m,
         tw_lp * lp)
 {
-    cs_callback_id id;
-    if (m->tag < 0)
-        id = make_cb_id(-m->tag);
-    else
-        id = make_cb_id(m->tag);
+    cs_callback_id id = make_cb_id(m->tag);
 
     int prev_chunk_id;
     uint64_t prev_chunk_size;
@@ -1298,7 +1290,7 @@ static void handle_complete_disk_op_rc(
                 h->event_type==CS_COMPLETE_DISK_OP ? "disk" : "fwd");
         qlist_add_tail(&qi->ql, &ns->pending_ops);
         // undo the stats
-        if (m->tag >= 0)
+        if (b->c3)
             ns->bytes_written_local -= qi->preq->committed;
     }
     else{
