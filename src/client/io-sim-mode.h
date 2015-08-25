@@ -141,10 +141,7 @@ static inline int is_sim_mode_init(struct io_sim_config const * c){
 }
 
 static inline int is_workload_compatible(struct io_sim_config const * c){
-    return c->oid_gen_mode == GEN_MODE_RANDOM ||
-           c->oid_gen_mode == GEN_MODE_WKLD_FILE_ID ||
-           c->oid_gen_mode == GEN_MODE_WKLD_HASH ||
-           c->oid_gen_mode == GEN_MODE_RANDOM_PERSIST;
+    return c->oid_gen_mode != GEN_MODE_RANDOM;
 }
 
 static inline int is_striping_compatible(struct io_sim_config const * c){

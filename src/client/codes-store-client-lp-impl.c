@@ -340,6 +340,7 @@ void cs_client_lp_init(
     ns->op_index_current = 0;
     INIT_QLIST_HEAD(&ns->ops);
     INIT_QLIST_HEAD(&ns->complete_ops);
+    INIT_QLIST_HEAD(&ns->file_id_mappings);
 
     ns->num_files = 0;
     memset(ns->file_id_opens, 0, MAX_FILE_CT*sizeof(*ns->file_id_opens));
