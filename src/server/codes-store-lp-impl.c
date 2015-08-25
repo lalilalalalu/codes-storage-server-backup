@@ -915,11 +915,7 @@ static void handle_complete_disk_op(
 	    ns->bytes_st_for_drain += p->committed;
 	    if(ns->bytes_st_for_drain >= bb_threshold)
 	    {
-		   cs_msg m_loc;
-		   msg_set_header(cs_magic, CS_COMPLETE_DRAIN, lp->gid, &m_loc.h);
-		   GETEV(compl, &m_loc, complete_chunk_send);
-		   compl->id = id;
-		   codes_ex_store_send_req(simple_id, CES_WRITE, ns->bytes_st_for_drain, sizeof(m_loc), &m_loc, lp);
+		   codes_ex_store_send_req(simple_id, CES_WRITE, ns->bytes_st_for_drain, lp);
 	   }
             // two cases to consider:
             // - thread can pull more work from src
@@ -1020,9 +1016,9 @@ void handle_complete_drain(
      resource_lp_free_reserved(bb_threshold, ns->st_tok, lp,
              CODES_MCTX_DEFAULT);
 
-     tprintf("%lu,%d: thread %d finished draining"
+     tprintf("%lu finished draining"
 		" data %d bytes from BB\n",
-		lp->gid, m->id.op_id, m->id.tid, bb_threshold);
+		lp->gid, bb_threshold);
 }
 // bitfields used:
 // c0 - no more work to do

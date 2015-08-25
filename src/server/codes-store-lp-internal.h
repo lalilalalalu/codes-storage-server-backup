@@ -85,7 +85,7 @@ struct ev_storage_alloc_callback {
     int tag;
 };
 struct ev_complete_drain {
-   cs_callback_id id;
+    uint64_t xfer_size;
 };
 struct ev_complete_disk_op {
     int tag;

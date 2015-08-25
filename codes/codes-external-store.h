@@ -37,8 +37,6 @@ void codes_ex_store_send_req(
 		int simple_id,
 		int type,
 		uint64_t msg_size,
-		int self_event_size,
-		void * self_event,	
 		tw_lp * sender);
 
 void codes_ex_store_send_req_rc(tw_lp * sender);

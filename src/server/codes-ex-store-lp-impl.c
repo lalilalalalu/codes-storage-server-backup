@@ -12,6 +12,10 @@
 #include <codes/codes-callback.h>
 #include <codes/quicklist.h>
 #include <codes/codes-external-store.h>
+#include <codes/model-net.h>
+#include <codes/model-net-sched.h>
+
+#include "codes-store-lp-internal.h"
 
 /* the external store LP only keeps track of the number of bytes written */
 typedef struct es_state_s {
@@ -129,6 +133,19 @@ static void handle_write_to_store(
 	    tw_lp * lp)
 {
     ns->bytes_written += m->xfer_size;
+
+    /* Send an ack back */
+    cs_msg m_ack;
+    msg_set_header(cs_magic, CS_COMPLETE_DRAIN, lp->gid, &m_ack.h);
+    GETEV(ack, &m_ack, complete_drain);
+    ack->xfer_size = m->xfer_size;
+
+    int prio = 0;
+    model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
+		    (void*) &prio);
+    model_net_event(es_mn_id, CODES_STORE_LP_NAME,m->h.src,
+				1.0, 0.0,
+				sizeof(cs_msg), &m_ack, 0.0, NULL, lp);
 
     return;
 }

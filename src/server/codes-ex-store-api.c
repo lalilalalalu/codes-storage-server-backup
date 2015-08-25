@@ -18,8 +18,6 @@ void codes_ex_store_send_req(
 		int simple_id,
 		int type,
 		uint64_t xfer_size,
-		int self_event_size,
-		void * self_event,
 		tw_lp * sender)
 {
     es_mn_id = simple_id;
@@ -38,7 +36,7 @@ void codes_ex_store_send_req(
     model_net_event(simple_id,
 	CODES_EX_STORE_LP_NAME, ex_store_lpid, 
 	xfer_size, 0.0,
-	sizeof(es_msg), &m_out, self_event_size, self_event, sender);
+	sizeof(es_msg), &m_out, 0.0, NULL, sender);
 }
 
 tw_lpid codes_ex_store_get_lpid(
