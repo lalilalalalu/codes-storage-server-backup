@@ -49,9 +49,9 @@ void io_sim_read_config(
         int rc2;
         /* read the mock workload params */
         cfg->req_mode = REQ_MODE_MOCK;
-        rc = configuration_get_value_int(handle, "mock", 
+        rc = configuration_get_value_int(handle, section_name,
                 "num_mock_writes", annotation, &r->u.mock.num_writes);
-        rc2 = configuration_get_value_int(handle, "mock",
+        rc2 = configuration_get_value_int(handle, section_name,
                 "num_mock_reads", annotation, &r->u.mock.num_reads);
         if (rc != 0 && rc2 != 0) {
             tw_error(TW_LOC, "Expected %s:num_mock_writes or %s:num_mock_reads\n",
