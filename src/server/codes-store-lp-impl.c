@@ -49,8 +49,8 @@ struct codes_mctx const * const CODES_STORE_LP_MCTX = &codes_store_lp_mctx;
 
 int cs_magic = 0;
 
-static int mn_id;
-static int simple_id;
+static int cli_srv_mn_id;
+static int srv_ext_mn_id;
 
 /* system parameters */
 static int num_threads = 4;
@@ -196,7 +196,7 @@ void codes_store_register()
 
 void codes_store_set_scnd_net(int net_id)
 {
-   simple_id = net_id;
+   srv_ext_mn_id = net_id;
 }
 
 void codes_store_configure(int model_net_id){
@@ -207,8 +207,8 @@ void codes_store_configure(int model_net_id){
     cs_magic = h1+h2;
 
    /* If there is a single network (by default) */
-    mn_id = model_net_id;
-    simple_id = model_net_id;
+    cli_srv_mn_id = model_net_id;
+    srv_ext_mn_id = model_net_id;
 
     // get the number of threads and the pipeline buffer size
     // if not available, no problem - use a default of 4 threads, 4MB per
@@ -290,14 +290,14 @@ static void codes_store_send_resp(
     model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
             (void*) &prio);
 
-    model_net_event_mctx(mn_id, CODES_STORE_LP_MCTX, cli_mctx,
+    model_net_event_mctx(cli_srv_mn_id, CODES_STORE_LP_MCTX, cli_mctx,
             CODES_STORE_LP_NAME, p->h.src, CS_REQ_CONTROL_SZ, 0.0,
             p->info.event_size, data, 0, NULL, lp);
 }
 
 static void codes_store_send_resp_rc(tw_lp *lp)
 {
-    model_net_event_rc(mn_id, lp, CS_REQ_CONTROL_SZ);
+    model_net_event_rc(cli_srv_mn_id, lp, CS_REQ_CONTROL_SZ);
 }
 
 
@@ -557,7 +557,7 @@ void handle_storage_alloc_callback_rc(
         struct ev_storage_alloc_callback * m,
         tw_lp * lp)
 {
-    model_net_pull_event_rc(mn_id, lp);
+    model_net_pull_event_rc(cli_srv_mn_id, lp);
 }
 
 void handle_storage_alloc_callback(
@@ -614,7 +614,7 @@ void handle_storage_alloc_callback(
       int prio = 0;
       model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
                     (void*) &prio);
-      model_net_pull_event_mctx(mn_id, CODES_STORE_LP_MCTX, &qi->cli_mctx,
+      model_net_pull_event_mctx(cli_srv_mn_id, CODES_STORE_LP_MCTX, &qi->cli_mctx,
 				CODES_STORE_LP_NAME, qi->cli_cb.h.src,
                     		t->chunk_size, 0.0, sizeof(cs_msg), &m_recv, lp);
 }
@@ -906,7 +906,7 @@ static void handle_complete_disk_op(
             msg_set_header(cs_magic, CS_COMPLETE_CHUNK_SEND, lp->gid, &m_loc.h);
             GETEV(compl, &m_loc, complete_chunk_send);
             compl->id = id;
-            model_net_event_mctx(mn_id, CODES_STORE_LP_MCTX, &qi->cli_mctx, 
+            model_net_event_mctx(cli_srv_mn_id, CODES_STORE_LP_MCTX, &qi->cli_mctx, 
 			CODES_STORE_LP_NAME, cli_lp, t->chunk_size,
                         0.0, 0, NULL, sizeof(m_loc), &m_loc, lp);
         }
@@ -915,7 +915,7 @@ static void handle_complete_disk_op(
 	    ns->bytes_st_for_drain += p->committed;
 	    if(ns->bytes_st_for_drain >= bb_threshold)
 	    {
-		   codes_ex_store_send_req(simple_id, CES_WRITE, ns->bytes_st_for_drain, lp);
+		   codes_ex_store_send_req(srv_ext_mn_id, CES_WRITE, ns->bytes_st_for_drain, lp);
 	   }
             // two cases to consider:
             // - thread can pull more work from src
@@ -985,7 +985,7 @@ static void handle_complete_disk_op(
                 int prio = 0;
                 model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
                         (void*) &prio);
-                model_net_pull_event_mctx(mn_id, CODES_STORE_LP_MCTX,
+                model_net_pull_event_mctx(cli_srv_mn_id, CODES_STORE_LP_MCTX,
                         &qi->cli_mctx, CODES_STORE_LP_NAME, cli_lp,
                         chunk_sz, 0.0, sizeof(cs_msg), &m_recv, lp);
                 lprintf("%lu: pull req to %lu\n", lp->gid, cli_lp);
@@ -1334,7 +1334,7 @@ static void handle_complete_disk_op_rc(
         p->committed -= prev_chunk_size;
 
         if (qi->req.type == CSREQ_READ){
-            model_net_event_rc(mn_id, lp, prev_chunk_size);
+            model_net_event_rc(cli_srv_mn_id, lp, prev_chunk_size);
         }
         // else write && chunk op is complete
         else {
@@ -1361,7 +1361,7 @@ static void handle_complete_disk_op_rc(
 
                 // we 'un-cleared' earlier, so nothing to do here
 
-                model_net_pull_event_rc(mn_id, lp);
+                model_net_pull_event_rc(cli_srv_mn_id, lp);
             }
             else{
                 tprintf("%lu,%d: thread %d finished rc (msg %p), "
