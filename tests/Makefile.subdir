@@ -1,14 +1,19 @@
-check_PROGRAMS += tests/test-simple \
-		  tests/test-checkpoint
+check_PROGRAMS += \
+	tests/test-simple \
+	tests/test-checkpoint \
+	tests/test-store-client
 
-TESTS += tests/test-simple.sh 
+TESTS += tests/test-simple.sh
 
 tests_test_simple_SOURCES = \
 	tests/test-simple.c \
 	tests/test-client.h \
-	tests/test-client.c 
+	tests/test-client.c
 
 tests_test_checkpoint_SOURCES = \
 	tests/test-checkpoint.c \
-        tests/test-checkpoint.h \
-	tests/test-client-checkpoint.c 
+	tests/test-checkpoint.h \
+	tests/test-client-checkpoint.c
+
+tests_test_store_client_SOURCES = \
+	tests/test-store-client.c
