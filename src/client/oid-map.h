@@ -26,7 +26,7 @@ int oid_map_lookup(uint64_t oid, struct oid_map const * map);
 // (exclusive). If there are more possible servers than strips, picks a random
 // start server such that there's no wraparound
 // returns the number of RNG calls made, or -1 if a failure
-int oid_map_create_striped_random(
+int oid_map_generate_striped_random(
         int stripe_factor,
         int start_server_incl,
         int end_server_excl,
@@ -35,14 +35,14 @@ int oid_map_create_striped_random(
         void * rng_arg,
         struct oid_map const * map);
 
-void oid_map_create_striped_random_rc(
+void oid_map_generate_striped_random_rc(
         int n_rng_calls,
         void (*rng_rc_fn)(void *),
         void * rng_arg);
 
 // deterministic version of ^ - generates arbitary OIDs you can't assume to be
 // unique across the range [start_server, end_server]
-int oid_map_create_striped(
+int oid_map_generate_striped(
         int start_server_incl,
         int end_server_excl,
         uint64_t * oids,

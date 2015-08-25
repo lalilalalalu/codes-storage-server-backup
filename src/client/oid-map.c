@@ -103,7 +103,7 @@ int oid_map_generate_striped_random(
     return (rng_fn) ? 1 + num_servers : 0;
 }
 
-void oid_map_create_striped_random_rc(
+void oid_map_generate_striped_random_rc(
         int n_rng_calls,
         void (*rng_rc_fn)(void *),
         void * rng_arg)
@@ -112,13 +112,13 @@ void oid_map_create_striped_random_rc(
         rng_rc_fn(rng_arg);
 }
 
-int oid_map_create_striped(
+int oid_map_generate_striped(
         int start_server_incl,
         int end_server_excl,
         uint64_t * oids,
         struct oid_map const * map)
 {
-    return oid_map_create_striped_random(end_server_excl - start_server_incl,
+    return oid_map_generate_striped_random(end_server_excl - start_server_incl,
             start_server_incl, end_server_excl, oids, NULL, NULL, map);
 }
 

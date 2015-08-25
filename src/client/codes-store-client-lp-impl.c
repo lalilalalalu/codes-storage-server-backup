@@ -1234,7 +1234,7 @@ static file_map* get_file_id_mapping(
         }
     }
     *num_rng_calls =
-        oid_map_create_striped_random(cli_config.dist_cfg.stripe_factor,
+        oid_map_generate_striped_random(cli_config.dist_cfg.stripe_factor,
                 start_svr, end_svr, fm->oids, rfn, rarg,
                 oid_map_method);
     if (*num_rng_calls == -1)
@@ -1265,7 +1265,7 @@ static void get_file_id_mapping_rc(
         }
     }
 
-    oid_map_create_striped_random_rc(num_rng_calls, rng_fn_rc, rng_arg);
+    oid_map_generate_striped_random_rc(num_rng_calls, rng_fn_rc, rng_arg);
 }
 
 client_req* client_req_init(unsigned int stripe_factor){
