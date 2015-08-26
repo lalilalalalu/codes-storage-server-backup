@@ -297,7 +297,7 @@ void cs_client_configure(int model_net_id){
                 oid_map_method = oid_map_create_mod(num_servers);
                 break;
             case PLC_MODE_LOCAL:
-                tw_error(TW_LOC, "not yet supported...\n");
+                oid_map_method = oid_map_create_mod(num_servers);
                 return;
         }
     }
@@ -332,8 +332,23 @@ void cs_client_lp_init(
         ns->reqs_remaining = 0;
     }
 
-    // TODO:
-    ns->server_idx_local = 0;
+    if (cli_config.placement_mode == PLC_MODE_LOCAL) {
+        // TODO: do we need finer-grained control over the mapping? This one
+        // just picks the first available
+        char const * group = NULL;
+        int rep = 0, offset = 0;
+        tw_lpid cs_id = -1ul;
+
+        // TODO: don't ignore annotations
+        codes_mapping_get_lp_info2(lp->gid, &group, NULL, NULL, &rep,
+                &offset);
+        codes_mapping_get_lp_id(group, CODES_STORE_LP_NAME, NULL, 1, rep,
+                offset, &cs_id);
+        ns->server_idx_local = codes_mapping_get_lp_relative_id(cs_id, 0, 1);
+        assert(ns->server_idx_local < num_servers);
+    }
+    else
+        ns->server_idx_local = -1;
 
     ns->error_ct = 0;
     ns->op_status_ct = 0;
