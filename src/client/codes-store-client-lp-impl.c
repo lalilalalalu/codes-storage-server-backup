@@ -334,7 +334,7 @@ void cs_client_lp_init(
 
     if (cli_config.placement_mode == PLC_MODE_LOCAL) {
         // TODO: do we need finer-grained control over the mapping? This one
-        // just picks the first available
+        // just does wraparound assignment
         char const * group = NULL;
         int rep = 0, offset = 0;
         int servers_per_group = 0;
