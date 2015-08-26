@@ -337,13 +337,16 @@ void cs_client_lp_init(
         // just picks the first available
         char const * group = NULL;
         int rep = 0, offset = 0;
+        int servers_per_group = 0;
         tw_lpid cs_id = -1ul;
 
         // TODO: don't ignore annotations
         codes_mapping_get_lp_info2(lp->gid, &group, NULL, NULL, &rep,
                 &offset);
+        servers_per_group = codes_mapping_get_lp_count(group, 1,
+                CODES_STORE_LP_NAME, NULL, 1);
         codes_mapping_get_lp_id(group, CODES_STORE_LP_NAME, NULL, 1, rep,
-                offset, &cs_id);
+                offset % servers_per_group, &cs_id);
         ns->server_idx_local = codes_mapping_get_lp_relative_id(cs_id, 0, 1);
         assert(ns->server_idx_local < num_servers);
     }
