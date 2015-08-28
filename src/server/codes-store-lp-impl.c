@@ -1306,7 +1306,7 @@ static void handle_complete_disk_op_rc(
         assert(ent != &ns->pending_ops);
     }
 
-    if (m->tag < 0) {
+    if (b->c1) {
         codes_store_send_resp_rc(lp);
     }
     else {
