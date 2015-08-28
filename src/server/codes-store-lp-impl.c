@@ -912,7 +912,8 @@ static void handle_complete_disk_op(
 	    ns->bytes_st_for_drain += p->committed;
 	    if(ns->bytes_st_for_drain >= bb_threshold)
 	    {
-		   codes_ex_store_send_req(srv_ext_mn_id, CES_WRITE, bb_threshold, lp);
+		   codes_ex_store_send_req(srv_ext_mn_id, bb_threshold,
+                           CODES_STORE_LP_MCTX, lp);
                    ns->bytes_st_for_drain -= bb_threshold;
                    b->c4 = 1;
 	   }

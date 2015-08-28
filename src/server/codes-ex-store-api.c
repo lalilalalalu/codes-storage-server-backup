@@ -20,12 +20,12 @@ void codes_ex_store_send_req_rc(int model_net_id, tw_lp * sender)
 }
 
 void codes_ex_store_send_req(
-		int simple_id,
-		int type,
-		uint64_t xfer_size,
+		int model_net_id,
+		uint64_t msg_size,
+        struct codes_mctx const * sender_mctx,
 		tw_lp * sender)
 {
-    es_mn_id = simple_id;
+    es_mn_id = model_net_id;
 
     /* get the external store LP */
     tw_lpid ex_store_lpid = codes_ex_store_get_lpid(0, NULL, 0);
@@ -33,11 +33,12 @@ void codes_ex_store_send_req(
     es_msg m_out;
     msg_set_header(ces_magic, CES_WRITE, sender->gid, &m_out.h);
 
-    m_out.xfer_size = xfer_size;
+    m_out.xfer_size = msg_size;
+    m_out.sender_mctx = *sender_mctx;
 
-    model_net_event(simple_id,
+    model_net_event_mctx(model_net_id, sender_mctx, CODES_MCTX_DEFAULT,
 	CODES_EX_STORE_LP_NAME, ex_store_lpid, 
-	xfer_size, 0.0,
+	msg_size, 0.0,
 	sizeof(es_msg), &m_out, 0.0, NULL, sender);
 }
 

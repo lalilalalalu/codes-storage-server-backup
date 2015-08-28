@@ -141,9 +141,9 @@ static void handle_write_to_store(
     int prio = 0;
     model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
 		    (void*) &prio);
-    model_net_event(es_mn_id, CODES_STORE_LP_NAME,m->h.src,
-				1.0, 0.0,
-				sizeof(cs_msg), &m_ack, 0.0, NULL, lp);
+    model_net_event_mctx(es_mn_id, CODES_MCTX_DEFAULT, &m->sender_mctx,
+            CODES_STORE_LP_NAME,m->h.src, 1.0, 0.0, sizeof(cs_msg), &m_ack,
+            0.0, NULL, lp);
 
     return;
 }
