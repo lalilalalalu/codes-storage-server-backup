@@ -23,15 +23,12 @@ void codes_ex_store_send_req(
     es_mn_id = simple_id;
 
     /* get the external store LP */
-    int prio = 3162; /* a very high number */
     tw_lpid ex_store_lpid = codes_ex_store_get_lpid(0, NULL, 0);
 
     es_msg m_out;
     msg_set_header(ces_magic, CES_WRITE, sender->gid, &m_out.h);
 
     m_out.xfer_size = xfer_size;
-    model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
-    (void*) &prio);
 
     model_net_event(simple_id,
 	CODES_EX_STORE_LP_NAME, ex_store_lpid, 
