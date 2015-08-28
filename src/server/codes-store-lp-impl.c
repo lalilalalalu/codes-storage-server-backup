@@ -848,6 +848,7 @@ void handle_recv_chunk(
 // c1 - metadata op - client ack'd, cleanup done
 // c2 - thread had more work to do
 // c3 - !c2, last running thread -> cleanup performed
+// c4 - sent an external storage drain request
 static void handle_complete_disk_op(
         cs_state * ns,
         tw_bf *b,
@@ -911,7 +912,9 @@ static void handle_complete_disk_op(
 	    ns->bytes_st_for_drain += p->committed;
 	    if(ns->bytes_st_for_drain >= bb_threshold)
 	    {
-		   codes_ex_store_send_req(srv_ext_mn_id, CES_WRITE, ns->bytes_st_for_drain, lp);
+		   codes_ex_store_send_req(srv_ext_mn_id, CES_WRITE, bb_threshold, lp);
+                   ns->bytes_st_for_drain -= bb_threshold;
+                   b->c4 = 1;
 	   }
             // two cases to consider:
             // - thread can pull more work from src
@@ -995,8 +998,9 @@ void handle_complete_drain_rc(
         tw_bf *b,
         msg_header const * h,
         struct ev_complete_drain * m,
-        tw_lp * lp) 
+        tw_lp * lp)
 {
+    resource_lp_free_reserved_rc(lp);
 }
 
 void handle_complete_drain(
@@ -1004,11 +1008,8 @@ void handle_complete_drain(
         tw_bf *b,
         msg_header const * h,
         struct ev_complete_drain * m,
-        tw_lp * lp) 
+        tw_lp * lp)
 {
-     // Reset the counter 
-     ns->bytes_st_for_drain = 0;
-
      resource_lp_free_reserved(bb_threshold, ns->st_tok, lp,
              CODES_MCTX_DEFAULT);
 
@@ -1323,13 +1324,17 @@ static void handle_complete_disk_op_rc(
 
         lprintf("%lu: commit:%lu-%lu\n", lp->gid,
                 p->committed, prev_chunk_size);
-        p->committed -= prev_chunk_size;
 
         if (qi->req.type == CSREQ_READ){
             model_net_event_rc(cli_srv_mn_id, lp, prev_chunk_size);
         }
         // else write && chunk op is complete
         else {
+            ns->bytes_st_for_drain -= p->committed;
+            if (b->c4){
+                codes_ex_store_send_req_rc(srv_ext_mn_id, lp);
+                ns->bytes_st_for_drain += bb_threshold;
+            }
             if (b->c0){
                 codes_store_send_resp_rc(lp);
             }
@@ -1365,6 +1370,8 @@ static void handle_complete_disk_op_rc(
                 // reversal of deletion occurred earlier
             }
         }
+
+        p->committed -= prev_chunk_size;
     }
 }
 

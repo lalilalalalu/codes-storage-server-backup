@@ -14,6 +14,11 @@
 
 char const * const CODES_EX_STORE_LP_NAME = "codes-external-store";
 
+void codes_ex_store_send_req_rc(int model_net_id, tw_lp * sender)
+{
+    model_net_event_rc(model_net_id, sender, 0);
+}
+
 void codes_ex_store_send_req(
 		int simple_id,
 		int type,

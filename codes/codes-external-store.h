@@ -39,7 +39,7 @@ void codes_ex_store_send_req(
 		uint64_t msg_size,
 		tw_lp * sender);
 
-void codes_ex_store_send_req_rc(tw_lp * sender);
+void codes_ex_store_send_req_rc(int model_net_id, tw_lp * sender);
 
 tw_lpid codes_ex_store_get_lpid(
         int rel_id,
