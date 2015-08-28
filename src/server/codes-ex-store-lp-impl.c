@@ -63,7 +63,6 @@ tw_lptype es_lp = {
 
 static void es_init(es_state_t * ns, tw_lp * lp)
 {
-    int i;
     uint32_t h1=0, h2=0;
 
     bj_hashlittle2(CODES_EX_STORE_LP_NAME, strlen(CODES_EX_STORE_LP_NAME), &h1, &h2);
@@ -111,7 +110,6 @@ static void es_event_handler_rc(
 static void es_finalize(es_state_t * ns, tw_lp * lp)
 {
     char data[1024];
-    char id[32];
     sprintf(data, "lp:%ld\tbytes_written:%d\n", lp->gid, ns->bytes_written);
     lp_io_write(lp->gid, "es-stats", strlen(data), data);
 }
