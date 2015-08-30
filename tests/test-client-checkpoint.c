@@ -18,7 +18,7 @@
 
 #define CHK_LP_NM "test-checkpoint-client"
 
-#define CLIENT_DBG 0
+#define CLIENT_DBG 1
 #define dprintf(_fmt, ...) \
     do {if (CLIENT_DBG) printf(_fmt, __VA_ARGS__);} while (0)
 
@@ -43,8 +43,8 @@ static tw_stime s_to_ns(tw_stime ns);
 
 enum test_checkpoint_event
 {
-    TEST_CLI_ACK = 12,
-    CLI_NEXT_OP
+    CLI_NEXT_OP=12,
+    CLI_ACK
 };
 
 struct test_checkpoint_state
@@ -56,6 +56,8 @@ struct test_checkpoint_state
     int wkld_id;
     tw_stime start_time;
     tw_stime completion_time;
+    int op_status_ct;
+    int error_ct;
 };
 
 struct test_checkpoint_msg
@@ -78,6 +80,13 @@ static tw_stime s_to_ns(tw_stime ns)
     return(ns * (1000.0 * 1000.0 * 1000.0));
 }
 
+static void send_req_to_store_rc(
+	struct test_checkpoint_state * ns,
+        tw_lp * lp)
+{
+	codes_store_send_req_rc(cli_dfly_id, lp);	
+}
+
 static void send_req_to_store(
 	struct test_checkpoint_state * ns,
         tw_lp * lp,
@@ -93,7 +102,7 @@ static void send_req_to_store(
             is_write? m->op_rc.u.write.size:m->op_rc.u.read.size, 
             &r);
 
-    msg_set_header(test_checkpoint_magic, TEST_CLI_ACK, lp->gid, &h);
+    msg_set_header(test_checkpoint_magic, CLI_ACK, lp->gid, &h);
 
     int dest_server_id;
     if (do_server_mapping)
@@ -105,7 +114,14 @@ static void send_req_to_store(
             0, &h, &ns->cb);
 
     dprintf("%lu: sent %s request\n", lp->gid, is_write ? "write" : "read");
-   
+  
+}
+
+void handle_next_operation_rc(
+	struct test_checkpoint_state * ns, 
+	tw_lp * lp)
+{
+	ns->op_status_ct++;
 }
 
 /* Add a certain delay event */
@@ -114,6 +130,8 @@ void handle_next_operation(
 	tw_lp * lp,
 	tw_stime time)
 {
+    ns->op_status_ct--;
+
    /* Issue another next event after a certain time */
     tw_event * e;
 
@@ -128,13 +146,26 @@ void handle_next_operation(
 
 static void next(
         struct test_checkpoint_state * ns,
-        struct test_checkpoint_msg * m,
+        struct test_checkpoint_msg * msg,
         tw_lp * lp)
 {
-    m = malloc(sizeof(struct test_checkpoint_msg));
-    codes_workload_get_next(ns->wkld_id, 0, ns->cli_rel_id, &m->op_rc);
+    if(ns->op_status_ct > 0)
+    {
+	char buf[64];
+	int written = sprintf(buf, "I/O workload operator error: %d  \n",lp->gid);
 
-      switch(m->op_rc.op_type)
+	lp_io_write(lp->gid, "errors", written, buf);
+	return;
+    }
+
+    ns->op_status_ct++;
+
+    struct codes_workload_op op_rc;
+    codes_workload_get_next(ns->wkld_id, 0, ns->cli_rel_id, &op_rc);
+
+    /* save the op in the message */
+    msg->op_rc = op_rc;
+    switch(op_rc.op_type)
       {
 	case CODES_WK_END:
 	{
@@ -154,8 +185,8 @@ static void next(
 	case CODES_WK_DELAY:
 	{
 		dprintf("Client rank %d will delay for %lf seconds.\n", ns->cli_rel_id,
-                m->op_rc.u.delay.seconds);
-                tw_stime nano_secs = s_to_ns(m->op_rc.u.delay.seconds);
+                msg->op_rc.u.delay.seconds);
+                tw_stime nano_secs = s_to_ns(msg->op_rc.u.delay.seconds);
 		handle_next_operation(ns, lp, nano_secs);
 	}
 	break;
@@ -163,28 +194,36 @@ static void next(
         case CODES_WK_OPEN:
 	{
 		dprintf("Client rank %d will open file id %ld \n ", ns->cli_rel_id,
-		m->op_rc.u.open.file_id);
+		msg->op_rc.u.open.file_id);
+		handle_next_operation(ns, lp, codes_local_latency(lp));
+	}
+	break;
+	
+	case CODES_WK_CLOSE:
+	{	
+		dprintf("Client rank %d will close file id %ld \n ", ns->cli_rel_id,
+		msg->op_rc.u.close.file_id);
 		handle_next_operation(ns, lp, codes_local_latency(lp));
 	}
 	break;
 	case CODES_WK_WRITE:
 	{
 		dprintf("Client rank %d initiate write operation size %ld offset %ld .\n", ns->cli_rel_id, 
-		m->op_rc.u.write.size, m->op_rc.u.write.offset);
-		send_req_to_store(ns, lp, m, 1);
+		msg->op_rc.u.write.size, msg->op_rc.u.write.offset);
+		send_req_to_store(ns, lp, msg, 1);
 	}	
 	break;
 
 	case CODES_WK_READ:
 	{
-		dprintf("Client rank %d initiate write operation size %ld offset %ld .\n", ns->cli_rel_id, m->op_rc.u.read.size, m->op_rc.u.read.offset);
+		dprintf("Client rank %d initiate write operation size %ld offset %ld .\n", ns->cli_rel_id, msg->op_rc.u.read.size, msg->op_rc.u.read.offset);
                 ns->num_sent_rd++;
-		send_req_to_store(ns, lp, m, 0);
+		send_req_to_store(ns, lp, msg, 0);
 	}
 	break;
 
 	default:
-	      dprintf("\n Unknown client operation %d ", m->op_rc.op_type);
+	      dprintf("\n Unknown client operation %d ", msg->op_rc.op_type);
       }
 	
 }
@@ -193,6 +232,7 @@ static void next_rc(
         struct test_checkpoint_msg *m,
         tw_lp *lp)
 {
+    ns->op_status_ct--;
     codes_workload_get_next_rc(ns->wkld_id, 0, ns->cli_rel_id, &m->op_rc);
 
     switch(m->op_rc.op_type) 
@@ -200,34 +240,38 @@ static void next_rc(
       case CODES_WK_READ:
       {
 	ns->num_sent_rd--;
-        codes_store_send_req_rc(cli_dfly_id, lp);
+        send_req_to_store_rc(ns, lp);
       }
       break;
 
       case CODES_WK_WRITE:
       {
          ns->num_sent_wr--;
-         codes_store_send_req_rc(cli_dfly_id, lp);
+         send_req_to_store_rc(ns, lp);
       }
       break;
 
       case CODES_WK_DELAY:
       case CODES_WK_BARRIER:
       case CODES_WK_OPEN:
+      case CODES_WK_CLOSE:
       {
 	codes_local_latency_reverse(lp);
+	handle_next_operation_rc(ns, lp);
       }
       break;
 
       case CODES_WK_END:
       {
       /* Do nothing */
+       return;
       }
       break;
 
      default:
-	printf("\n Unknown client operation reverse ", m->op_rc.op_type);
+	printf("\n Unknown client operation reverse %d", m->op_rc.op_type);
     }
+    
 }
 
 
@@ -237,18 +281,24 @@ static void test_checkpoint_event(
         struct test_checkpoint_msg * m,
         tw_lp * lp)
 {
+#if CLIENT_DEBUG
+    fprintf(ns->fdbg, "event num %d\n", ns->event_num);
+#endif
+    if (ns->error_ct > 0){
+        ns->error_ct++;
+        return;
+    }
     assert(m->h.magic == test_checkpoint_magic);
 
     switch(m->h.event_type) {
-        case TEST_CLI_ACK:
-              dprintf("%lu: received ack\n", lp->gid);
-              next(ns, m, lp);
-            break;
 	case CLI_NEXT_OP:
-//		dprintf(" %lu: next op\n", lp->gid);	
 		next(ns, m, lp);
 	break;
 
+	case CLI_ACK:
+		printf("\n Ack received from store %lf ", tw_now(lp));
+		handle_next_operation(ns, lp, codes_local_latency(lp));
+	break;
         default:
             assert(0);
     }
@@ -261,15 +311,25 @@ static void test_checkpoint_event_rc(
 {
     assert(m->h.magic == test_checkpoint_magic);
 
+    if (ns->error_ct > 0){
+        ns->error_ct--;
+        if (ns->error_ct==0){
+            lp_io_write_rev(lp->gid, "errors");
+#if CLIENT_DEBUG
+            fprintf(ns->fdbg, "left bad state through reverse\n");
+#endif
+        }
+        return;
+    }
     switch(m->h.event_type) {
-        case TEST_CLI_ACK:
-              dprintf("%lu: received ack (rc)\n", lp->gid);
-              assert(m->ret == CODES_STORE_OK);
-              next_rc(ns, m, lp);
-            break;
 	case CLI_NEXT_OP:	
 		next_rc(ns, m, lp);
 	break;
+	
+	case CLI_ACK:
+		handle_next_operation_rc(ns, lp);
+	break;
+
         default:
             assert(0);
     }
@@ -278,13 +338,25 @@ static void test_checkpoint_event_rc(
 static void test_checkpoint_init(
         struct test_checkpoint_state * ns,
         tw_lp * lp)
-{
+{ 
+    ns->op_status_ct = 0;
+    ns->error_ct = 0;
     ns->num_sent_wr = 0;
     ns->num_sent_rd = 0;
     INIT_CODES_CB_INFO(&ns->cb, struct test_checkpoint_msg, h, tag, ret);
 
     ns->cli_rel_id = codes_mapping_get_lp_relative_id(lp->gid, 0, 0);
     ns->start_time = tw_now(lp);
+   
+    /* Issue another next event after a certain time */
+    tw_event * e;
+
+    struct test_checkpoint_msg * m_new;
+    e = codes_event_new(lp->gid, codes_local_latency(lp), lp);
+    m_new = tw_event_data(e);
+    msg_set_header(test_checkpoint_magic, CLI_NEXT_OP, lp->gid, &m_new->h);    
+    tw_event_send(e);
+
 }
 
 static void test_checkpoint_pre_run(
@@ -293,7 +365,6 @@ static void test_checkpoint_pre_run(
 {
       char* w_params = (char*)&c_params;
       ns->wkld_id = codes_workload_load("checkpoint_io_workload", w_params, 0, ns->cli_rel_id);
-      next(ns, NULL, lp);
 }
 
 static void test_checkpoint_finalize(
