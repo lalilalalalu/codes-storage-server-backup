@@ -72,9 +72,6 @@ struct client_req {
 
 struct cs_client_state {
     int client_idx;
-    /* TODO: refactor this away from assuming mock testing 
-     * once we have multiple generation types */
-    int reqs_remaining;
 
     /* workload info */
     int wkld_id;
@@ -155,13 +152,6 @@ static void handle_cs_client_recv_ack(
     tw_bf *b,
     cs_client_msg * m,
     tw_lp * lp);
-/* NOTE: generating mock requests takes entirely different path than workload
- * acks */
-static void handle_cs_client_recv_ack_mock(
-    cs_client_state * ns,
-    tw_bf * b,
-    cs_client_msg * m,
-    tw_lp * lp);
 static void handle_client_wkld_next(
     cs_client_state * ns,
     tw_bf * b,
@@ -180,11 +170,6 @@ static void handle_cs_client_kickoff_rev(
 static void handle_cs_client_recv_ack_rev(
     cs_client_state * ns,
     tw_bf * b,
-    cs_client_msg * m,
-    tw_lp * lp);
-static void handle_cs_client_recv_ack_rev_mock(
-    cs_client_state * ns,
-    tw_bf *b, 
     cs_client_msg * m,
     tw_lp * lp);
 static void handle_client_wkld_next_rev(
@@ -313,23 +298,12 @@ void cs_client_lp_init(
     // TODO: configure a seed value or use an out of range lpid
     tw_rand_initial_seed(lp->rng, 0);
 
-    struct io_sim_cli_req_cfg *c = &cli_config.req_cfg;
-    if (cli_config.req_mode == REQ_MODE_MOCK) {
-        ns->reqs_remaining = c->u.mock.is_write
-            ? c->u.mock.num_writes
-            : c->u.mock.num_reads;
-        ns->wkld_id = -1;
-        ns->wkld_done = -1;
-    }
-    else {
-        ns->wkld_done = 0;
-        ns->wkld_id = codes_workload_load(c->u.wkld.cfg.type,
-                c->u.wkld.cfg.params, 0, ns->client_idx);
-        if (ns->wkld_id == -1){
-            tw_error(TW_LOC, "client %d (LP %lu) unable to load workload\n",
-                    ns->client_idx, lp->gid);
-        }
-        ns->reqs_remaining = 0;
+    ns->wkld_done = 0;
+    ns->wkld_id = codes_workload_load(cli_config.req_cfg.type,
+            cli_config.req_cfg.params, 0, ns->client_idx);
+    if (ns->wkld_id == -1){
+        tw_error(TW_LOC, "client %d (LP %lu) unable to load workload\n",
+                ns->client_idx, lp->gid);
     }
 
     if (cli_config.placement_mode == PLC_MODE_LOCAL) {
@@ -515,68 +489,7 @@ void handle_cs_client_kickoff(
         tw_bf *b,
         cs_client_msg * m,
         tw_lp * lp){
-    switch(cli_config.req_mode){
-        case REQ_MODE_MOCK:
-            /* cheat: inc remaining requests and process a fake success ack
-             * - acks events generate new requests */
-            m->ret = CODES_STORE_OK;
-            ns->reqs_remaining++;
-            ns->op_status_ct++;
-            handle_cs_client_recv_ack_mock(ns,b,m,lp);
-            break;
-        case REQ_MODE_WKLD:
-            handle_client_wkld_next(ns,b,m,lp);
-            break;
-        default:
-            tw_error(TW_LOC, "unexpected or uninitialized request mode");
-    }
-}
-
-void handle_cs_client_recv_ack_mock(
-        cs_client_state * ns,
-        tw_bf *b,
-        cs_client_msg * m,
-        tw_lp * lp){
-
-    /* decrement on receipt rather than on send */
-    ns->reqs_remaining--;
-    ns->op_status_ct--;
-
-    if(ns->reqs_remaining > 0){
-        /* compute dest oid and server */
-        uint64_t oid;
-        switch (cli_config.oid_gen_mode){
-            case GEN_MODE_RANDOM:
-                oid = (uint64_t)(tw_rand_unif(&lp->rng[1])*(double)UINT64_MAX);
-                break;
-            case GEN_MODE_ZERO:
-                oid = 0;
-                break;
-            case GEN_MODE_PLACEMENT:
-                // TODO
-                assert(0);
-                return;
-            default:
-                assert(!"unexpected or unitialized mapping mode");
-        }
-
-        msg_header h;
-        struct codes_store_request r;
-        msg_set_header(cs_client_magic, CS_CLI_RECV_ACK, lp->gid, &h);
-        codes_store_init_req(cli_config.req_cfg.u.mock.is_write
-                ? CSREQ_WRITE : CSREQ_READ,
-                0, oid, 0, cli_config.req_cfg.u.mock.req_size, &r);
-
-        // TODO - compute server id
-        codes_store_send_req(&r, 0, lp, cli_mn_id, CODES_MCTX_DEFAULT, 0, &h,
-                &cli_cb);
-
-        ns->op_status_ct++;
-
-#if CLIENT_DEBUG && 0
-        fprintf(ns->fdbg, "LP %lu sending req for oid %lu to srv %lu\n", lp->gid, oid, srv_lp);
-#endif
-    }
+    handle_client_wkld_next(ns,b,m,lp);
 }
 
 void handle_client_wkld_next(
@@ -942,51 +855,16 @@ void handle_cs_client_recv_ack(
 
     assert(m->ret == CODES_STORE_OK);
 
-    switch(cli_config.req_mode){
-        case REQ_MODE_MOCK:
-            handle_cs_client_recv_ack_mock(ns,b,m,lp);
-            break;
-        case REQ_MODE_WKLD:
-            handle_cs_client_recv_ack_wkld(ns,b,m,lp);
-            break;
-        default:
-            assert(!"unexpected or uninitialized client request mode");
-    }
+    handle_cs_client_recv_ack_wkld(ns,b,m,lp);
 }
 
 void handle_cs_client_kickoff_rev(
         cs_client_state * ns,
         tw_bf * b,
         cs_client_msg * m,
-        tw_lp * lp){
-    /* anti-cheat ;) see forward handler */
-    switch(cli_config.req_mode){
-        case REQ_MODE_MOCK:
-            ns->reqs_remaining--;
-            handle_cs_client_recv_ack_rev_mock(ns,b,m,lp);
-            break;
-        case REQ_MODE_WKLD:
-            handle_client_wkld_next_rev(ns,b,m,lp);
-            break;
-        default:
-            tw_error(TW_LOC, "unexpected or uninitialized request mode");
-    }
-}
-
-void handle_cs_client_recv_ack_rev_mock(
-        cs_client_state * ns,
-        tw_bf * b,
-        cs_client_msg * m,
-        tw_lp * lp){
-    if (ns->reqs_remaining == 0) {
-        if (cli_config.oid_gen_mode == GEN_MODE_RANDOM){
-            tw_rand_reverse_unif(lp->rng);
-        }
-        codes_store_send_req_rc(cli_mn_id, lp);
-        ns->op_status_ct--;
-    }
-    ns->reqs_remaining++;
-    ns->op_status_ct++;
+        tw_lp * lp)
+{
+    handle_client_wkld_next_rev(ns,b,m,lp);
 }
 
 void handle_client_wkld_next_rev(
@@ -1170,18 +1048,9 @@ void handle_cs_client_recv_ack_rev(
         cs_client_state * ns,
         tw_bf * b,
         cs_client_msg * m,
-        tw_lp * lp){
-    switch(cli_config.req_mode){
-        case REQ_MODE_MOCK:
-            ns->reqs_remaining--;
-            handle_cs_client_recv_ack_rev_mock(ns,b,m,lp);
-            break;
-        case REQ_MODE_WKLD:
-            handle_cs_client_recv_ack_rev_wkld(ns,b,m,lp);
-            break;
-        default:
-            tw_error(TW_LOC, "unexpected or uninitialized client request mode");
-    }
+        tw_lp * lp)
+{
+    handle_cs_client_recv_ack_rev_wkld(ns,b,m,lp);
 }
 
 /**** END IMPLEMENTATIONS ****/

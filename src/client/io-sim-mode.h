@@ -16,23 +16,11 @@
  * simulation will run. Note that the respective variables (io_sim_*) MUST be
  * set prior to calling the LP initializers */
 
-enum io_sim_cli_req_mode_t{
-    /* uninitialized */
-    REQ_MODE_UNINIT,
-    /* generate arbitrary requests from config file */
-    REQ_MODE_MOCK,
-    /* read and execute workloads from config file */
-    REQ_MODE_WKLD,
-};
-
 enum io_sim_cli_oid_gen_mode_t{
     /* uninitialized */
     GEN_MODE_UNINIT, 
     /* OID=0. Debug mode. */
     GEN_MODE_ZERO,
-    /* use ROSS LP rng to generate oid for req, use placement to map to
-     * server. Incompatible with REQ_MODE_WKLD */
-    GEN_MODE_RANDOM,
     /* use jenkins hash on the workload file id */
     GEN_MODE_WKLD_HASH,
     /* map workload file ids directly to oids, use placement to map to server.
@@ -86,20 +74,6 @@ enum io_sim_cli_open_mode_t {
 
 // configuration data structures for io sim modes
 
-struct io_sim_cli_req_cfg {
-    union {
-        struct {
-            int is_write;
-            int num_reads;
-            int num_writes;
-            int req_size;
-        } mock;
-        struct {
-            codes_workload_config_return cfg;
-        } wkld;
-    }u;
-};
-
 struct io_sim_cli_oid_gen_cfg { };
 struct io_sim_cli_placement_cfg { };
 
@@ -109,13 +83,12 @@ struct io_sim_cli_dist_cfg {
 };
 
 struct io_sim_config {
-    enum io_sim_cli_req_mode_t       req_mode;
     enum io_sim_cli_oid_gen_mode_t   oid_gen_mode;
     enum io_sim_cli_placement_mode_t placement_mode;
     enum io_sim_cli_dist_mode_t      dist_mode;
     enum io_sim_cli_open_mode_t      open_mode;
 
-    struct io_sim_cli_req_cfg        req_cfg;
+    codes_workload_config_return     req_cfg;
     struct io_sim_cli_oid_gen_cfg    oid_gen_cfg;
     struct io_sim_cli_placement_cfg  placement_cfg;
     struct io_sim_cli_dist_cfg       dist_cfg;
@@ -133,15 +106,10 @@ void io_sim_read_config(
 
 /* an uninitialized state is an error state */
 static inline int is_sim_mode_init(struct io_sim_config const * c){
-    return c->req_mode       != REQ_MODE_UNINIT &&
-           c->oid_gen_mode   != GEN_MODE_UNINIT &&
+    return c->oid_gen_mode   != GEN_MODE_UNINIT &&
            c->placement_mode != PLC_MODE_UNINIT &&
            c->dist_mode      != DIST_MODE_UNINIT &&
            c->open_mode      != OPEN_MODE_UNINIT;
-}
-
-static inline int is_workload_compatible(struct io_sim_config const * c){
-    return c->oid_gen_mode != GEN_MODE_RANDOM;
 }
 
 static inline int is_striping_compatible(struct io_sim_config const * c){
@@ -154,7 +122,6 @@ static inline int is_valid_sim_config(struct io_sim_config const * c){
     /* sim will break under certain combinations of behaviors. check them
      * here */
     return
-        !(c->req_mode == REQ_MODE_WKLD && !is_workload_compatible(c)) &&
         !(c->dist_mode == DIST_MODE_RR && !is_striping_compatible(c)) &&
         !(c->open_mode == OPEN_MODE_SHARED &&
                 c->placement_mode == PLC_MODE_LOCAL);
