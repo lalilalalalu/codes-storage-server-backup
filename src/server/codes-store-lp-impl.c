@@ -1149,7 +1149,7 @@ void handle_recv_cli_req_rc(
     lprintf("%lu: new req rc id:%d from %lu\n", lp->gid, qi->op_id,
             qi->cli_cb.h.src);
 
-    if (m->req.type == CSREQ_OPEN) {
+    if (m->req.type == CSREQ_OPEN || m->req.type == CSREQ_CREATE) {
         lsm_io_event_rc(lp);
         return;
     }
