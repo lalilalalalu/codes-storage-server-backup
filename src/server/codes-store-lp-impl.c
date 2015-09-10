@@ -1151,7 +1151,6 @@ void handle_recv_cli_req_rc(
 
     if (m->req.type == CSREQ_OPEN || m->req.type == CSREQ_CREATE) {
         lsm_io_event_rc(lp);
-        return;
     }
     else {
         // before doing cleanups (free(...)), reverse the alloc event
