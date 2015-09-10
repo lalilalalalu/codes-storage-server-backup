@@ -60,7 +60,7 @@ void codes_store_send_req(
     int prio = 0;
     model_net_set_msg_param(MN_MSG_PARAM_SCHED, MN_SCHED_PARAM_PRIO,
             (void*) &prio);
-    model_net_event_mctx(model_net_id, cli_mctx, CODES_MCTX_DEFAULT,
+    model_net_event_mctx(model_net_id, cli_mctx, CODES_STORE_LP_MCTX,
             CODES_STORE_LP_NAME, store_lpid, CS_REQ_CONTROL_SZ, 0.0,
             sizeof(cs_msg), &m, 0, NULL, sender);
 }
