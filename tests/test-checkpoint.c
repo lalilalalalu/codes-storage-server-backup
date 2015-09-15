@@ -106,10 +106,10 @@ int main(int argc, char * argv[])
 
     tw_run();
 
-    if (do_lp_io){
+    /*if (do_lp_io){
         int ret = lp_io_flush(io_handle, MPI_COMM_WORLD);
         assert(ret == 0 || !"lp_io_flush failure");
-    }
+    }*/
 
     model_net_report_stats(dragonfly_net_id);
     model_net_report_stats(simple_net_id);
