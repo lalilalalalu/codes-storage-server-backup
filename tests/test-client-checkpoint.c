@@ -121,7 +121,6 @@ static void send_req_to_store(
             0, &h, &ns->cb);
 
     dprintf("%lu: sent %s request\n", lp->gid, is_write ? "write" : "read");
-  
 }
 
 void handle_next_operation_rc(
@@ -167,29 +166,28 @@ void generate_random_traffic(
     tw_lp * lp)
 {
    char anno[MAX_NAME_LENGTH];
-   struct test_checkpoint_msg * m_remote = malloc(sizeof(struct test_checkpoint_msg*));
-   msg_set_header(test_checkpoint_magic, CLI_ACK, lp->gid, &m_remote->h);
+   struct test_checkpoint_msg m_remote;
+   msg_set_header(test_checkpoint_magic, CLI_ACK, lp->gid, &(m_remote.h));
 
    char lp_grp_name[128];
    char lp_name[128];
 
    int mapping_gid, mapping_tid, mapping_rid, mapping_offset;
-
    codes_mapping_get_lp_info(lp->gid, lp_grp_name, &mapping_gid, lp_name, &mapping_tid, NULL, &mapping_rid, &mapping_offset);
 
-   int num_clients = codes_mapping_get_lp_count("DRAGONFLY_GRP", 1,
-           lp_name, NULL, 1);
-   int num_clients_per_rep = codes_mapping_get_lp_count("DRAGONFLY_GRP", 0, 
+   if(strcmp(lp_grp_name, "") == 0)
+      tw_error(TW_LOC,"\n Invalid group name! ");
+
+   int num_clients = codes_mapping_get_lp_count(NULL, 0,
            lp_name, NULL, 1);
 
-   printf("\n Num clients %d per group %d %s", num_clients, num_clients_per_rep, lp_name);
    tw_lpid dest_gid;
    tw_lpid dest_svr = tw_rand_integer(lp->rng, 0, num_clients - 1);
-   codes_mapping_get_lp_id("DRAGONFLY_GRP", lp_name, anno, 1, dest_svr/num_clients_per_rep, dest_svr%num_clients_per_rep, &dest_gid );
+   codes_mapping_get_lp_id(lp_grp_name, lp_name, anno, 1, dest_svr, 0, &dest_gid );
 
    int payload_sz = tw_rand_integer(lp->rng, 0, MAX_PAYLOAD_SZ);
    model_net_event(cli_dfly_id, "background-traffic", dest_gid, payload_sz, 0.0, 
-           sizeof(struct test_checkpoint_msg*), (const void*)m_remote, 
+           sizeof(struct test_checkpoint_msg*), (const void*)&m_remote, 
            0, NULL, lp);
    msg->payload_sz = payload_sz;
 
@@ -254,7 +252,14 @@ static void next(
                 tw_stime nano_secs = s_to_ns(msg->op_rc.u.delay.seconds);
         msg->saved_delay_time = ns->delayed_time;
         ns->delayed_time = tw_now(lp) + nano_secs;
-		generate_random_traffic(ns, msg, lp);
+   
+        /* Generate random traffic during the delay */
+        tw_event * e;
+        struct test_checkpoint_msg * m_new;
+        e = codes_event_new(lp->gid, MEAN_INTERVAL, lp);
+        m_new = tw_event_data(e);
+        msg_set_header(test_checkpoint_magic, CLI_BCKGND_GEN, lp->gid, &m_new->h);    
+        tw_event_send(e);
 	}
 	break;
 
@@ -323,7 +328,6 @@ static void next_rc(
       case CODES_WK_DELAY:
       {
          ns->delayed_time = m->saved_delay_time;
-         generate_random_traffic_rc(ns, m, lp);
       }
       break;
       case CODES_WK_BARRIER:
