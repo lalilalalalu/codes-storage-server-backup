@@ -55,9 +55,9 @@ static int srv_ext_mn_id;
 /* system parameters */
 static int num_threads = 4;
 static int pipeline_unit_size = (1<<22);
-static int memory_size = (1<<12);
-static int storage_size = (1<<12);
-static int bb_threshold = (1<<5);
+static uint64_t memory_size = (1<<12);
+static uint64_t storage_size = (1<<12);
+static uint64_t bb_threshold = (1<<5);
 
 /* callback parameters. TODO: make these more flexible */
 struct codes_cb_info cb_lsm, cb_rsc_palloc, cb_rsc_memory,
@@ -226,11 +226,11 @@ void codes_store_configure(int model_net_id){
             "req_threads", NULL, &num_threads);
     configuration_get_value_int(&config, CODES_STORE_LP_NAME,
             "thread_buf_sz", NULL, &pipeline_unit_size);
-    configuration_get_value_int(&config, CODES_STORE_LP_NAME,
+    configuration_get_value_longint(&config, CODES_STORE_LP_NAME,
             "memory_size", NULL, &memory_size);
-    configuration_get_value_int(&config, CODES_STORE_LP_NAME,
+    configuration_get_value_longint(&config, CODES_STORE_LP_NAME,
             "storage_size", NULL, &storage_size);
-    configuration_get_value_int(&config, CODES_STORE_LP_NAME,
+    configuration_get_value_longint(&config, CODES_STORE_LP_NAME,
             "bb_threshold", NULL, &bb_threshold);
 
     assert(num_threads > 0 
