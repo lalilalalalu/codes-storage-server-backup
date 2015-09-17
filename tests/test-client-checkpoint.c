@@ -18,9 +18,10 @@
 #include "test-checkpoint.h"
 
 #define CHK_LP_NM "test-checkpoint-client"
-#define MEAN_INTERVAL 500.0
-#define CLIENT_DBG 1
-#define MAX_PAYLOAD_SZ 4096
+#define MEAN_INTERVAL 1000000.0
+#define CLIENT_DBG 0
+#define MAX_PAYLOAD_SZ 2048
+#define TRACK 0
 #define dprintf(_fmt, ...) \
     do {if (CLIENT_DBG) printf(_fmt, __VA_ARGS__);} while (0)
 
@@ -61,8 +62,8 @@ struct test_checkpoint_state
     tw_stime completion_time;
     int op_status_ct;
     int error_ct;
-    int finished_wrkld;
     tw_stime delayed_time;
+    int num_completed_ops;
 };
 
 struct test_checkpoint_msg
@@ -137,8 +138,6 @@ void handle_next_operation(
 	tw_stime time)
 {
     ns->op_status_ct--;
-
-    printf("\n Next operation after %lf ", time);
    /* Issue another next event after a certain time */
     tw_event * e;
 
@@ -153,30 +152,40 @@ void handle_next_operation(
 
 void generate_random_traffic_rc(
       struct test_checkpoint_state * ns,
+      tw_bf * b,
       struct test_checkpoint_msg * msg,
       tw_lp * lp)
 {
-    tw_rand_unif(lp->rng);
+    tw_rand_reverse_unif(lp->rng);
+    tw_rand_reverse_unif(lp->rng);
+    
     model_net_event_rc(cli_dfly_id, lp, msg->payload_sz);
+
+    if(b->c1)
+        codes_local_latency_reverse(lp);
+
+    if(b->c0)
+	    handle_next_operation_rc(ns, lp);
 }
 
 void generate_random_traffic(
     struct test_checkpoint_state * ns,
+    tw_bf * b,
     struct test_checkpoint_msg * msg,
     tw_lp * lp)
 {
-   char anno[MAX_NAME_LENGTH];
-   struct test_checkpoint_msg m_remote;
-   msg_set_header(test_checkpoint_magic, CLI_ACK, lp->gid, &(m_remote.h));
+   b->c0 = 0;
+   b->c1 = 0;
 
-   char lp_grp_name[128];
-   char lp_name[128];
+   char anno[MAX_NAME_LENGTH];
+   struct test_checkpoint_msg * m_remote = malloc(sizeof(struct test_checkpoint_msg));
+   msg_set_header(test_checkpoint_magic, CLI_BCKGND_GEN, lp->gid, &(m_remote->h));
+
+   char lp_grp_name[MAX_NAME_LENGTH];
+   char lp_name[MAX_NAME_LENGTH];
 
    int mapping_gid, mapping_tid, mapping_rid, mapping_offset;
    codes_mapping_get_lp_info(lp->gid, lp_grp_name, &mapping_gid, lp_name, &mapping_tid, NULL, &mapping_rid, &mapping_offset);
-
-   if(strcmp(lp_grp_name, "") == 0)
-      tw_error(TW_LOC,"\n Invalid group name! ");
 
    int num_clients = codes_mapping_get_lp_count(NULL, 0,
            lp_name, NULL, 1);
@@ -186,38 +195,46 @@ void generate_random_traffic(
    codes_mapping_get_lp_id(lp_grp_name, lp_name, anno, 1, dest_svr, 0, &dest_gid );
 
    int payload_sz = tw_rand_integer(lp->rng, 0, MAX_PAYLOAD_SZ);
-   model_net_event(cli_dfly_id, "background-traffic", dest_gid, payload_sz, 0.0, 
-           sizeof(struct test_checkpoint_msg*), (const void*)&m_remote, 
+   model_net_event(cli_dfly_id, "test", dest_gid, payload_sz, 0.0, 
+           sizeof(struct test_checkpoint_msg), (const void*)m_remote, 
            0, NULL, lp);
    msg->payload_sz = payload_sz;
 
    if(tw_now(lp) < ns->delayed_time)
    {
+        b->c1 = 1;
+        tw_stime ts = MEAN_INTERVAL + tw_rand_exponential(lp->rng, MEAN_INTERVAL); 
+        //if(lp->gid == TRACK)
+        //    printf("\n Received background traffic scheduling another after %lf ", tw_now(lp) + ts);
         tw_event * e;
         struct test_checkpoint_msg * m_new;
-        e = codes_event_new(lp->gid, MEAN_INTERVAL, lp);
+        e = codes_event_new(lp->gid, ts, lp);
         m_new = tw_event_data(e);
-        msg_set_header(test_checkpoint_magic, CLI_BCKGND_GEN, lp->gid, &m_new->h);    
+        msg_set_header(test_checkpoint_magic, CLI_BCKGND_GEN, lp->gid, &(m_new->h));    
         tw_event_send(e);
+   }
+   else
+   {
+      /* delay has ended, call next event */
+      b->c0 = 1;
+      handle_next_operation(ns, lp, codes_local_latency(lp));
    }
 }
 
 static void next(
         struct test_checkpoint_state * ns,
+        tw_bf * bf,
         struct test_checkpoint_msg * msg,
         tw_lp * lp)
 {
     if(ns->op_status_ct > 0)
     {
-	char buf[64];
-	int written = sprintf(buf, "I/O workload operator error: %d  \n",lp->gid);
+        char buf[64];
+        int written = sprintf(buf, "I/O workload operator error: %d  \n",lp->gid);
 
-	lp_io_write(lp->gid, "errors", written, buf);
-	return;
-    }
-
-    if(ns->finished_wrkld)
+        lp_io_write(lp->gid, "errors", written, buf);
         return;
+    }
 
     ns->op_status_ct++;
 
@@ -226,44 +243,47 @@ static void next(
 
     /* save the op in the message */
     msg->op_rc = op_rc;
-    
-    switch(op_rc.op_type)
-   {
-	case CODES_WK_END:
-	{
+   
+    if(op_rc.op_type == CODES_WK_END)
+    {
 		ns->completion_time = tw_now(lp);
-	    ns->finished_wrkld = 1;
         dprintf("Client rank %d completed workload.\n", ns->cli_rel_id);
 		return;
-	}
-	break;
-
+    
+    }
+    switch(op_rc.op_type)
+   {
 	case CODES_WK_BARRIER:
 	{
 		dprintf("Client rank %d hit barrier.\n", ns->cli_rel_id);
 		handle_next_operation(ns, lp, codes_local_latency(lp));
 	}
-        break;
+    break;
 
 	case CODES_WK_DELAY:
 	{
 		dprintf("Client rank %d will delay for %lf seconds.\n", ns->cli_rel_id,
                 msg->op_rc.u.delay.seconds);
                 tw_stime nano_secs = s_to_ns(msg->op_rc.u.delay.seconds);
+#if GENERATE_TRAFFIC       
         msg->saved_delay_time = ns->delayed_time;
         ns->delayed_time = tw_now(lp) + nano_secs;
    
         /* Generate random traffic during the delay */
         tw_event * e;
         struct test_checkpoint_msg * m_new;
-        e = codes_event_new(lp->gid, MEAN_INTERVAL, lp);
+        tw_stime ts = MEAN_INTERVAL + tw_rand_exponential(lp->rng, MEAN_INTERVAL);
+        e = codes_event_new(lp->gid, ts, lp);
         m_new = tw_event_data(e);
         msg_set_header(test_checkpoint_magic, CLI_BCKGND_GEN, lp->gid, &m_new->h);    
         tw_event_send(e);
+#else
+        handle_next_operation(ns, lp, codes_local_latency(lp));
+#endif
 	}
 	break;
 
-        case CODES_WK_OPEN:
+    case CODES_WK_OPEN:
 	{
 		dprintf("Client rank %d will open file id %ld \n ", ns->cli_rel_id,
 		msg->op_rc.u.open.file_id);
@@ -283,7 +303,6 @@ static void next(
 		dprintf("Client rank %d initiate write operation size %ld offset %ld .\n", ns->cli_rel_id, 
 		msg->op_rc.u.write.size, msg->op_rc.u.write.offset);
 		send_req_to_store(ns, lp, msg, 1);
-	    handle_next_operation(ns, lp, codes_local_latency(lp));
     }	
 	break;
 
@@ -292,7 +311,6 @@ static void next(
 		dprintf("Client rank %d initiate write operation size %ld offset %ld .\n", ns->cli_rel_id, msg->op_rc.u.read.size, msg->op_rc.u.read.offset);
                 ns->num_sent_rd++;
 		send_req_to_store(ns, lp, msg, 0);
-	    handle_next_operation(ns, lp, codes_local_latency(lp));
     }
 	break;
 
@@ -303,17 +321,21 @@ static void next(
 }
 static void next_rc(
         struct test_checkpoint_state *ns,
+        tw_bf * bf,
         struct test_checkpoint_msg *m,
         tw_lp *lp)
 {
     ns->op_status_ct--;
     codes_workload_get_next_rc(ns->wkld_id, 0, ns->cli_rel_id, &m->op_rc);
 
+    if(m->op_rc.op_type == CODES_WK_END)
+        return;
+
     switch(m->op_rc.op_type) 
     {
       case CODES_WK_READ:
       {
-	ns->num_sent_rd--;
+	    ns->num_sent_rd--;
         send_req_to_store_rc(ns, lp);
       }
       break;
@@ -327,25 +349,23 @@ static void next_rc(
 
       case CODES_WK_DELAY:
       {
+ #ifdef GENERATE_TRAFFIC 
          ns->delayed_time = m->saved_delay_time;
+         tw_rand_reverse_unif(lp->rng);
+#else
+         handle_next_operation_rc(ns, lp); 
+#endif
       }
       break;
       case CODES_WK_BARRIER:
       case CODES_WK_OPEN:
       case CODES_WK_CLOSE:
       {
-	codes_local_latency_reverse(lp);
-	handle_next_operation_rc(ns, lp);
+    	codes_local_latency_reverse(lp);
+	    handle_next_operation_rc(ns, lp);
       }
       break;
 
-      case CODES_WK_END:
-      {
-      /* Do nothing */
-          ns->finished_wrkld = 0;
-          return;
-      }
-      break;
 
      default:
 	printf("\n Unknown client operation reverse %d", m->op_rc.op_type);
@@ -371,16 +391,17 @@ static void test_checkpoint_event(
 
     switch(m->h.event_type) {
 	case CLI_NEXT_OP:
-		next(ns, m, lp);
+		next(ns, b, m, lp);
 	break;
 
 	case CLI_ACK:
-		printf("\n Ack received from store %lf client %ld ", tw_now(lp), lp->gid);
+        ns->num_completed_ops++;
+		dprintf("\n !!!! Ack %d received from store %lf client %ld ", ns->num_completed_ops, tw_now(lp), lp->gid);
 		handle_next_operation(ns, lp, codes_local_latency(lp));
 	break;
 
     case CLI_BCKGND_GEN:
-        generate_random_traffic(ns, m, lp);
+        generate_random_traffic(ns, b, m, lp);
         break;
 
         default:
@@ -407,12 +428,17 @@ static void test_checkpoint_event_rc(
     }
     switch(m->h.event_type) {
 	case CLI_NEXT_OP:	
-		next_rc(ns, m, lp);
+		next_rc(ns, b, m, lp);
 	break;
 	
 	case CLI_ACK:
-		handle_next_operation_rc(ns, lp);
+		ns->num_completed_ops--;
+        handle_next_operation_rc(ns, lp);
 	break;
+
+    case CLI_BCKGND_GEN:
+        generate_random_traffic_rc(ns, b, m, lp);
+        break;
 
         default:
             assert(0);
@@ -427,22 +453,13 @@ static void test_checkpoint_init(
     ns->error_ct = 0;
     ns->num_sent_wr = 0;
     ns->num_sent_rd = 0;
-    ns->finished_wrkld = 0;
     ns->delayed_time = 0.0;
     INIT_CODES_CB_INFO(&ns->cb, struct test_checkpoint_msg, h, tag, ret);
 
     ns->cli_rel_id = codes_mapping_get_lp_relative_id(lp->gid, 0, 0);
     ns->start_time = tw_now(lp);
-   
-    /* Issue another next event after a certain time */
-    tw_event * e;
 
-    struct test_checkpoint_msg * m_new;
-    e = codes_event_new(lp->gid, codes_local_latency(lp), lp);
-    m_new = tw_event_data(e);
-    msg_set_header(test_checkpoint_magic, CLI_NEXT_OP, lp->gid, &m_new->h);    
-    tw_event_send(e);
-
+    handle_next_operation(ns, lp, codes_local_latency(lp));
 }
 
 static void test_checkpoint_pre_run(
@@ -512,7 +529,7 @@ void test_checkpoint_configure(int model_net_id){
     num_clients =
         codes_mapping_get_lp_count(NULL, 0, CHK_LP_NM, NULL, 1);
 
-    printf("\n Number of clients %d ", num_clients);
+    dprintf("\n Number of clients %d ", num_clients);
     c_params.nprocs = num_clients;
 
     clients_per_server = num_clients / num_servers;
