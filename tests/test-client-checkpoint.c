@@ -19,7 +19,7 @@
 
 #define CHK_LP_NM "test-checkpoint-client"
 #define MEAN_INTERVAL 1000000.0
-#define CLIENT_DBG 0
+#define CLIENT_DBG 1
 #define MAX_PAYLOAD_SZ 2048
 #define TRACK 0
 #define dprintf(_fmt, ...) \
@@ -34,7 +34,6 @@ static double mtti;
 static int test_checkpoint_magic;
 static int cli_dfly_id;
 // following is for mapping clients to servers
-static int do_server_mapping = 0;
 static int num_servers;
 static int num_clients;
 static int clients_per_server;
@@ -64,6 +63,10 @@ struct test_checkpoint_state
     int error_ct;
     tw_stime delayed_time;
     int num_completed_ops;
+    uint64_t read_size;
+    uint64_t write_size;
+    int num_reads;
+    int num_writes;
 };
 
 struct test_checkpoint_msg
@@ -112,16 +115,13 @@ static void send_req_to_store(
 
     msg_set_header(test_checkpoint_magic, CLI_ACK, lp->gid, &h);
 
-    int dest_server_id;
-    if (do_server_mapping)
-        dest_server_id = ns->cli_rel_id / clients_per_server;
-    else
-        dest_server_id = 0;
+    int dest_server_id = ns->cli_rel_id / clients_per_server;
    
     codes_store_send_req(&r, dest_server_id, lp, cli_dfly_id, CODES_MCTX_DEFAULT,
             0, &h, &ns->cb);
 
-    dprintf("%lu: sent %s request\n", lp->gid, is_write ? "write" : "read");
+    if(lp->gid == TRACK)
+        dprintf("%lu: sent %s request\n", lp->gid, is_write ? "write" : "read");
 }
 
 void handle_next_operation_rc(
@@ -247,22 +247,28 @@ static void next(
     if(op_rc.op_type == CODES_WK_END)
     {
 		ns->completion_time = tw_now(lp);
-        dprintf("Client rank %d completed workload.\n", ns->cli_rel_id);
-		return;
+        
+        if(lp->gid == TRACK)
+            dprintf("Client rank %d completed workload.\n", ns->cli_rel_id);
+		
+        return;
     
     }
     switch(op_rc.op_type)
    {
 	case CODES_WK_BARRIER:
 	{
-		dprintf("Client rank %d hit barrier.\n", ns->cli_rel_id);
-		handle_next_operation(ns, lp, codes_local_latency(lp));
+        if(lp->gid == TRACK)
+		    dprintf("Client rank %d hit barrier.\n", ns->cli_rel_id);
+		
+        handle_next_operation(ns, lp, codes_local_latency(lp));
 	}
     break;
 
 	case CODES_WK_DELAY:
 	{
-		dprintf("Client rank %d will delay for %lf seconds.\n", ns->cli_rel_id,
+        if(lp->gid == TRACK)
+		    dprintf("Client rank %d will delay for %lf seconds.\n", ns->cli_rel_id,
                 msg->op_rc.u.delay.seconds);
                 tw_stime nano_secs = s_to_ns(msg->op_rc.u.delay.seconds);
 #if GENERATE_TRAFFIC       
@@ -278,37 +284,44 @@ static void next(
         msg_set_header(test_checkpoint_magic, CLI_BCKGND_GEN, lp->gid, &m_new->h);    
         tw_event_send(e);
 #else
-        handle_next_operation(ns, lp, codes_local_latency(lp));
+        handle_next_operation(ns, lp, nano_secs);
 #endif
 	}
 	break;
 
     case CODES_WK_OPEN:
 	{
-		dprintf("Client rank %d will open file id %ld \n ", ns->cli_rel_id,
-		msg->op_rc.u.open.file_id);
+        if(lp->gid == TRACK)
+		    dprintf("Client rank %d will open file id %ld \n ", ns->cli_rel_id,
+		
+        msg->op_rc.u.open.file_id);
 		handle_next_operation(ns, lp, codes_local_latency(lp));
 	}
 	break;
 	
 	case CODES_WK_CLOSE:
 	{	
-		dprintf("Client rank %d will close file id %ld \n ", ns->cli_rel_id,
-		msg->op_rc.u.close.file_id);
+        if(lp->gid == TRACK)
+		    dprintf("Client rank %d will close file id %ld \n ", ns->cli_rel_id,
+		
+        msg->op_rc.u.close.file_id);
 		handle_next_operation(ns, lp, codes_local_latency(lp));
 	}
 	break;
 	case CODES_WK_WRITE:
 	{
-		dprintf("Client rank %d initiate write operation size %ld offset %ld .\n", ns->cli_rel_id, 
-		msg->op_rc.u.write.size, msg->op_rc.u.write.offset);
+        if(lp->gid == TRACK)
+		    dprintf("Client rank %d initiate write operation size %ld offset %ld .\n", ns->cli_rel_id, 
+		
+        msg->op_rc.u.write.size, msg->op_rc.u.write.offset);
 		send_req_to_store(ns, lp, msg, 1);
     }	
 	break;
 
 	case CODES_WK_READ:
 	{
-		dprintf("Client rank %d initiate write operation size %ld offset %ld .\n", ns->cli_rel_id, msg->op_rc.u.read.size, msg->op_rc.u.read.offset);
+        if(lp->gid == TRACK)
+		    dprintf("Client rank %d initiate write operation size %ld offset %ld .\n", ns->cli_rel_id, msg->op_rc.u.read.size, msg->op_rc.u.read.offset);
                 ns->num_sent_rd++;
 		send_req_to_store(ns, lp, msg, 0);
     }
@@ -396,7 +409,8 @@ static void test_checkpoint_event(
 
 	case CLI_ACK:
         ns->num_completed_ops++;
-		dprintf("\n !!!! Ack %d received from store %lf client %ld ", ns->num_completed_ops, tw_now(lp), lp->gid);
+        if(lp->gid == TRACK)
+		    dprintf("\n !!!! Ack %d received from store %lf client %ld ", ns->num_completed_ops, tw_now(lp), lp->gid);
 		handle_next_operation(ns, lp, codes_local_latency(lp));
 	break;
 
@@ -454,11 +468,18 @@ static void test_checkpoint_init(
     ns->num_sent_wr = 0;
     ns->num_sent_rd = 0;
     ns->delayed_time = 0.0;
+
+    ns->num_reads = 0;
+    ns->num_writes = 0;
+    ns->read_size = 0;
+    ns->write_size = 0;
+
     INIT_CODES_CB_INFO(&ns->cb, struct test_checkpoint_msg, h, tag, ret);
 
     ns->cli_rel_id = codes_mapping_get_lp_relative_id(lp->gid, 0, 0);
     ns->start_time = tw_now(lp);
 
+    printf("\n Client ID LP ID %d ", lp->gid);
     handle_next_operation(ns, lp, codes_local_latency(lp));
 }
 
@@ -521,9 +542,6 @@ void test_checkpoint_configure(int model_net_id){
 	   &c_params.mtti);
     assert(!rc);
    
-    configuration_get_value_int(&config, "test-checkpoint-client", "do_server_mapping", NULL,
-            &do_server_mapping);
-
     num_servers =
         codes_mapping_get_lp_count(NULL, 0, CODES_STORE_LP_NAME, NULL, 1);
     num_clients =
