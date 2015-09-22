@@ -63,10 +63,17 @@ struct test_checkpoint_state
     int error_ct;
     tw_stime delayed_time;
     int num_completed_ops;
+    
+    tw_stime write_start_time;
+    tw_stime total_write_time;
+
     uint64_t read_size;
     uint64_t write_size;
+    
     int num_reads;
     int num_writes;
+
+    char output_buf[512];
 };
 
 struct test_checkpoint_msg
@@ -77,6 +84,7 @@ struct test_checkpoint_msg
     codes_store_ret_t ret;
     struct codes_workload_op op_rc;
     tw_stime saved_delay_time;
+    tw_stime saved_write_time;
 };
 
 /* convert ns to seconds */
@@ -122,6 +130,9 @@ static void send_req_to_store(
 
     if(lp->gid == TRACK)
         dprintf("%lu: sent %s request\n", lp->gid, is_write ? "write" : "read");
+
+    ns->write_start_time = tw_now(lp);
+    ns->write_size += m->op_rc.u.write.size;
 }
 
 void handle_next_operation_rc(
@@ -412,7 +423,9 @@ static void test_checkpoint_event(
         if(lp->gid == TRACK)
 		    dprintf("\n !!!! Ack %d received from store %lf client %ld ", ns->num_completed_ops, tw_now(lp), lp->gid);
 		handle_next_operation(ns, lp, codes_local_latency(lp));
-	break;
+	    m->saved_write_time = ns->total_write_time;
+        ns->total_write_time += (tw_now(lp) - ns->write_start_time);
+    break;
 
     case CLI_BCKGND_GEN:
         generate_random_traffic(ns, b, m, lp);
@@ -447,6 +460,7 @@ static void test_checkpoint_event_rc(
 	
 	case CLI_ACK:
 		ns->num_completed_ops--;
+        ns->total_write_time = m->saved_write_time;
         handle_next_operation_rc(ns, lp);
 	break;
 
@@ -468,6 +482,7 @@ static void test_checkpoint_init(
     ns->num_sent_wr = 0;
     ns->num_sent_rd = 0;
     ns->delayed_time = 0.0;
+    ns->total_write_time = 0.0;
 
     ns->num_reads = 0;
     ns->num_writes = 0;
@@ -502,6 +517,12 @@ static void test_checkpoint_finalize(
         tw_error(TW_LOC, "num_complete_rd:%d does not match num_reqs:%d\n",
                 ns->num_complete_rd, num_reqs);
     */
+   int written = 0;
+   if(!ns->cli_rel_id)
+      written = sprintf(ns->output_buf, "# Format <LP id> <Bytes written> <Time to write bytes >");
+   
+   written += sprintf(ns->output_buf + written, "%lu %lu %ld %lf \n", lp->gid, ns->cli_rel_id, ns->write_size, ns->total_write_time);
+   lp_io_write(lp->gid, "checkpoint-client-stats", written, ns->output_buf);   
 }
 
 tw_lptype test_checkpoint_lp = {

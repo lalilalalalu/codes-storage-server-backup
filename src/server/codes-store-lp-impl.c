@@ -88,6 +88,10 @@ struct cs_state {
     // number of errors we have encountered (for self-suspend)
     int error_ct;
 
+    /* Measure the time being spent on writing data onto the BB node */
+    tw_stime req_start_time;
+    tw_stime time_to_write;
+
     // scratch output buffer (for lpio)
     char output_buf[256];
 
@@ -107,7 +111,9 @@ struct cs_qitem {
     struct codes_mctx cli_mctx;
     cs_pipelined_req *preq;
     struct qlist_head ql;
+    tw_stime req_init_time;
 };
+
 typedef struct cs_qitem cs_qitem;
 
 /* for rc-stack */
@@ -389,20 +395,21 @@ void cs_finalize(cs_state *ns, tw_lp *lp) {
     int written = 0;
     if (ns->server_index == 0){
         written = sprintf(ns->output_buf,
-                "# Format: <server id> <LP id> bytes <read> <written>"
+                "# Format: <server id> <LP id> bytes <read> <written> time <written>"
 #if CS_PRINT_RNG == 1
                 " <rng model> <rng codes>"
 #endif
                 "\n");
     }
     written += sprintf(ns->output_buf+written,
-            "%d %lu %lu %lu"
+            "%d %lu %lu %lu %lf "
 #if CS_PRINT_RNG == 1
             " %lu %lu"
 #endif
             "\n",
             ns->server_index, lp->gid,
-            ns->bytes_read_local, ns->bytes_written_local
+            ns->bytes_read_local, ns->bytes_written_local,
+            ns->time_to_write
 #if CS_PRINT_RNG == 1
             , lp->rng[0].count, lp->rng[1].count
 #endif
@@ -457,6 +464,7 @@ void handle_recv_cli_req(
     qi->cli_cb = m->callback;
     qi->cli_mctx = m->cli_mctx;
     qi->preq = NULL;
+    qi->req_init_time = tw_now(lp);
     qlist_add_tail(&qi->ql, &ns->pending_ops);
 
     // save op id for rc
@@ -482,7 +490,8 @@ void handle_recv_cli_req(
                 is_create ? LSM_WRITE_REQUEST : LSM_READ_REQUEST,
                 0.0, lp, CODES_MCTX_DEFAULT, tag, &h_cb, &cb_lsm);
     }
-    else {
+    else 
+    {
         qi->preq = cs_pipeline_init(num_threads, pipeline_unit_size,
                 qi->req.xfer_size);
 
@@ -935,6 +944,7 @@ static void handle_complete_disk_op(
                 // NOTE: can't simply check if we're last active thread - others
                 // may be waiting on allocation still (single chunk requests)
 
+                b->c5 = 1;
                 // "finalize" this thread
                 tprintf("%lu,%d: thread %d finished (msg %p) "
                         "tid counts (%d, %d, %d+1) (rem:0)\n",
@@ -943,6 +953,7 @@ static void handle_complete_disk_op(
                 p->nthreads_fin++;
                 resource_lp_free_reserved(t->punit_size, ns->mem_tok, lp,
                         CODES_MCTX_DEFAULT);
+                ns->time_to_write += (tw_now(lp) - qi->req_init_time);
                 // if we are the last thread then cleanup req
                 if (p->nthreads_fin == p->nthreads){
                     // just put onto queue, as reconstructing is just too
@@ -975,7 +986,6 @@ static void handle_complete_disk_op(
                         p->rem, chunk_sz);
                 p->rem -= chunk_sz;
 
-		
                 // setup, send message
                 cs_msg m_recv;
                 msg_set_header(cs_magic, CS_RECV_CHUNK, cli_lp, &m_recv.h);
@@ -1291,6 +1301,9 @@ static void handle_complete_disk_op_rc(
                 h->event_type==CS_COMPLETE_DISK_OP ? "disk" : "fwd");
         qlist_add_tail(&qi->ql, &ns->pending_ops);
         // undo the stats
+        if(b->c5)
+            ns->time_to_write -= (tw_now(lp) - qi->req_init_time);
+
         if (b->c3)
             ns->bytes_written_local -= qi->preq->committed;
     }
