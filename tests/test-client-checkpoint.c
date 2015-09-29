@@ -28,7 +28,6 @@
 /* checkpoint restart parameters */
 static double checkpoint_sz;
 static double checkpoint_wr_bw;
-static double app_run_time;
 static double mtti;
 
 static int test_checkpoint_magic;
@@ -555,8 +554,8 @@ void test_checkpoint_configure(int model_net_id){
 	   &c_params.checkpoint_wr_bw);
     assert(!rc);
 
-    rc = configuration_get_value_double(&config, "test-checkpoint-client", "app_run_time", NULL,
-	   &c_params.app_runtime);
+    rc = configuration_get_value_int(&config, "test-checkpoint-client", "chkpoint_iters", NULL,
+         &c_params.total_checkpoints);
     assert(!rc);
 
     rc = configuration_get_value_double(&config, "test-checkpoint-client", "mtti", NULL,
