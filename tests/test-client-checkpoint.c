@@ -29,7 +29,6 @@
 /* checkpoint restart parameters */
 static double checkpoint_sz;
 static double checkpoint_wr_bw;
-static double app_run_time;
 static double mtti;
 
 static int test_checkpoint_magic;
