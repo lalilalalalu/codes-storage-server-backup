@@ -18,10 +18,11 @@
 #include "test-checkpoint.h"
 
 #define CHK_LP_NM "test-checkpoint-client"
-#define MEAN_INTERVAL 1000000.0
+#define MEAN_INTERVAL 10000000.0
 #define CLIENT_DBG 1
 #define MAX_PAYLOAD_SZ 2048
 #define TRACK 0
+#define GENERATE_TRAFFIC 0
 #define dprintf(_fmt, ...) \
     do {if (CLIENT_DBG) printf(_fmt, __VA_ARGS__);} while (0)
 
@@ -37,6 +38,7 @@ static int cli_dfly_id;
 static int num_servers;
 static int num_clients;
 static int clients_per_server;
+static double my_checkpoint_sz;
 
 static checkpoint_wrkld_params c_params = {0, 0, 0, 0, 0};
 
@@ -47,7 +49,8 @@ enum test_checkpoint_event
 {
     CLI_NEXT_OP=12,
     CLI_ACK,
-    CLI_BCKGND_GEN
+    CLI_BCKGND_GEN,
+    CLI_BCKGND_COMPLETE
 };
 
 struct test_checkpoint_state
@@ -74,6 +77,7 @@ struct test_checkpoint_state
     int num_writes;
 
     char output_buf[512];
+    int64_t num_random_pckts;
 };
 
 struct test_checkpoint_msg
@@ -99,11 +103,18 @@ static tw_stime s_to_ns(tw_stime ns)
     return(ns * (1000.0 * 1000.0 * 1000.0));
 }
 
+static double terabytes_to_megabytes(double tib)
+{
+    return (tib * 1000.0 * 1000.0);
+}
+
 static void send_req_to_store_rc(
 	struct test_checkpoint_state * ns,
-        tw_lp * lp)
+        tw_lp * lp,
+        struct test_checkpoint_msg * m)
 {
 	codes_store_send_req_rc(cli_dfly_id, lp);	
+    ns->write_size -= m->op_rc.u.write.size;
 }
 
 static void send_req_to_store(
@@ -161,6 +172,27 @@ void handle_next_operation(
     return;
 }
 
+void complete_random_traffic_rc(
+    struct test_checkpoint_state * ns,
+    tw_bf * b,
+    struct test_checkpoint_msg * msg,
+    tw_lp * lp)
+{
+    ns->num_random_pckts--;
+}
+
+void complete_random_traffic(
+    struct test_checkpoint_state * ns,
+    tw_bf * b,
+    struct test_checkpoint_msg * msg,
+    tw_lp * lp)
+{
+   /* Record in some statistics? */ 
+    ns->num_random_pckts++;
+    if(lp->gid == TRACK)
+        dprintf("\n Packet %ld completed at time %lf ", ns->num_random_pckts, tw_now(lp));
+
+}
 void generate_random_traffic_rc(
       struct test_checkpoint_state * ns,
       tw_bf * b,
@@ -173,12 +205,14 @@ void generate_random_traffic_rc(
     model_net_event_rc(cli_dfly_id, lp, msg->payload_sz);
 
     if(b->c1)
-        codes_local_latency_reverse(lp);
+        tw_rand_reverse_unif(lp->rng);
 
     if(b->c0)
-	    handle_next_operation_rc(ns, lp);
+    {
+        codes_local_latency_reverse(lp); 
+        handle_next_operation_rc(ns, lp);
+    }
 }
-
 void generate_random_traffic(
     struct test_checkpoint_state * ns,
     tw_bf * b,
@@ -190,7 +224,7 @@ void generate_random_traffic(
 
    char anno[MAX_NAME_LENGTH];
    struct test_checkpoint_msg * m_remote = malloc(sizeof(struct test_checkpoint_msg));
-   msg_set_header(test_checkpoint_magic, CLI_BCKGND_GEN, lp->gid, &(m_remote->h));
+   msg_set_header(test_checkpoint_magic, CLI_BCKGND_COMPLETE, lp->gid, &(m_remote->h));
 
    char lp_grp_name[MAX_NAME_LENGTH];
    char lp_name[MAX_NAME_LENGTH];
@@ -203,10 +237,15 @@ void generate_random_traffic(
 
    tw_lpid dest_gid;
    tw_lpid dest_svr = tw_rand_integer(lp->rng, 0, num_clients - 1);
+   
+   if(dest_svr == ns->cli_rel_id)
+       dest_svr = (dest_svr + 1) % num_clients;
+
    codes_mapping_get_lp_id(lp_grp_name, lp_name, anno, 1, dest_svr, 0, &dest_gid );
 
    int payload_sz = tw_rand_integer(lp->rng, 0, MAX_PAYLOAD_SZ);
-   model_net_event(cli_dfly_id, "test", dest_gid, payload_sz, 0.0, 
+   //printf("\n LP ID %ld Dest gid is %ld ", lp->gid, dest_gid);
+   model_net_event(cli_dfly_id, "background-tr", dest_gid, payload_sz, 0.0, 
            sizeof(struct test_checkpoint_msg), (const void*)m_remote, 
            0, NULL, lp);
    msg->payload_sz = payload_sz;
@@ -226,6 +265,8 @@ void generate_random_traffic(
    }
    else
    {
+      if(lp->gid == TRACK)
+          printf("\n Finished issuing random traffic, now generating checkpoints");
       /* delay has ended, call next event */
       b->c0 = 1;
       handle_next_operation(ns, lp, codes_local_latency(lp));
@@ -282,7 +323,7 @@ static void next(
 		    dprintf("Client rank %d will delay for %lf seconds.\n", ns->cli_rel_id,
                 msg->op_rc.u.delay.seconds);
                 tw_stime nano_secs = s_to_ns(msg->op_rc.u.delay.seconds);
-#if GENERATE_TRAFFIC       
+#if GENERATE_TRAFFIC == 1      
         msg->saved_delay_time = ns->delayed_time;
         ns->delayed_time = tw_now(lp) + nano_secs;
    
@@ -339,7 +380,7 @@ static void next(
 	break;
 
 	default:
-	      dprintf("\n Unknown client operation %d ", msg->op_rc.op_type);
+	      printf("\n Unknown client operation %d ", msg->op_rc.op_type);
       }
 	
 }
@@ -360,20 +401,20 @@ static void next_rc(
       case CODES_WK_READ:
       {
 	    ns->num_sent_rd--;
-        send_req_to_store_rc(ns, lp);
+        send_req_to_store_rc(ns, lp, m);
       }
       break;
 
       case CODES_WK_WRITE:
       {
          ns->num_sent_wr--;
-         send_req_to_store_rc(ns, lp);
+         send_req_to_store_rc(ns, lp, m);
       }
       break;
 
       case CODES_WK_DELAY:
       {
- #ifdef GENERATE_TRAFFIC 
+#if GENERATE_TRAFFIC == 1 
          ns->delayed_time = m->saved_delay_time;
          tw_rand_reverse_unif(lp->rng);
 #else
@@ -431,6 +472,10 @@ static void test_checkpoint_event(
         generate_random_traffic(ns, b, m, lp);
         break;
 
+    case CLI_BCKGND_COMPLETE:
+        complete_random_traffic(ns, b, m, lp);
+        break;
+
         default:
             assert(0);
     }
@@ -468,6 +513,10 @@ static void test_checkpoint_event_rc(
         generate_random_traffic_rc(ns, b, m, lp);
         break;
 
+   case CLI_BCKGND_COMPLETE:
+        complete_random_traffic_rc(ns, b, m, lp);
+        break;
+
         default:
             assert(0);
     }
@@ -488,13 +537,14 @@ static void test_checkpoint_init(
     ns->num_writes = 0;
     ns->read_size = 0;
     ns->write_size = 0;
+    ns->num_random_pckts = 0;
 
     INIT_CODES_CB_INFO(&ns->cb, struct test_checkpoint_msg, h, tag, ret);
 
     ns->cli_rel_id = codes_mapping_get_lp_relative_id(lp->gid, 0, 0);
     ns->start_time = tw_now(lp);
 
-    printf("\n Client ID LP ID %d ", lp->gid);
+    //printf("\n Client ID LP ID %d ", lp->gid);
     handle_next_operation(ns, lp, codes_local_latency(lp));
 }
 
@@ -549,14 +599,16 @@ void test_checkpoint_configure(int model_net_id){
     int rc;
     rc = configuration_get_value_double(&config, "test-checkpoint-client", "checkpoint_sz", NULL,
 	   &c_params.checkpoint_sz);
+
+    
     assert(!rc);
 
     rc = configuration_get_value_double(&config, "test-checkpoint-client", "checkpoint_wr_bw", NULL,
 	   &c_params.checkpoint_wr_bw);
     assert(!rc);
 
-    rc = configuration_get_value_double(&config, "test-checkpoint-client", "app_run_time", NULL,
-	   &c_params.app_runtime);
+    rc = configuration_get_value_int(&config, "test-checkpoint-client", "chkpoint_iters", NULL,
+	   &c_params.total_checkpoints);
     assert(!rc);
 
     rc = configuration_get_value_double(&config, "test-checkpoint-client", "mtti", NULL,
@@ -568,9 +620,10 @@ void test_checkpoint_configure(int model_net_id){
     num_clients =
         codes_mapping_get_lp_count(NULL, 0, CHK_LP_NM, NULL, 1);
 
-    dprintf("\n Number of clients %d ", num_clients);
     c_params.nprocs = num_clients;
 
+    my_checkpoint_sz = terabytes_to_megabytes(c_params.checkpoint_sz)/num_clients;
+    
     clients_per_server = num_clients / num_servers;
     if (clients_per_server == 0)
         clients_per_server = 1;
