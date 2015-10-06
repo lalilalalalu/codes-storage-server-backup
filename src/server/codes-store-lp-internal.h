@@ -32,7 +32,7 @@ extern struct codes_mctx const * const CODES_STORE_LP_MCTX;
     X(CS_COMPLETE_DRAIN,          complete_drain, ) \
     X(CS_COMPLETE_CHUNK_SEND,     complete_chunk_send, )
 
-#define X(a,b,c) a,
+#define X(a,b,c) a c,
 enum cs_event_type {
     CS_EVENTS
 };
