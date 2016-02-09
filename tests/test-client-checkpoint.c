@@ -22,7 +22,7 @@
 #define CLIENT_DBG 1
 #define MAX_PAYLOAD_SZ 2048
 #define TRACK 0
-#define GENERATE_TRAFFIC 0
+#define GENERATE_TRAFFIC 1
 #define dprintf(_fmt, ...) \
     do {if (CLIENT_DBG) printf(_fmt, __VA_ARGS__);} while (0)
 

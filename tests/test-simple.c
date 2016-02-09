@@ -80,15 +80,17 @@ int main(int argc, char * argv[])
      * returned is the identifier for the network type */
     net_ids = model_net_configure(&num_nets);
     
+    /* Network topology supported is either only simplenet
+     * OR dragonfly */
     if(net_ids[0] != SIMPLENET)
-       assert(num_nets == 2 && net_ids[1] == SIMPLENET);
+       assert(num_nets == 3 && net_ids[2] == SIMPLENET && net_ids[0] == DRAGONFLY);
     else
        assert(num_nets == 1);
 
     model_net_id = net_ids[0];
  
-    if(num_nets == 2)
-       simple_net_id = net_ids[1];
+    if(net_ids[0] == DRAGONFLY)
+       simple_net_id = net_ids[2];
     
     free(net_ids);
 
@@ -97,7 +99,7 @@ int main(int argc, char * argv[])
      * the codes_mapping interface for getting LP counts and such */
     codes_store_configure(model_net_id);
     
-    if(num_nets == 2)
+    if(num_nets > 1)
        codes_store_set_scnd_net(simple_net_id);
    
     resource_lp_configure();

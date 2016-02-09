@@ -702,8 +702,8 @@ void handle_palloc_callback(
 		    lp->gid, qi->op_id, tid, chunk_id, sz);
 
 
-            /* First check if the requested amount of storage is available. */
-            msg_header h_cb;
+        /* First check if the requested amount of storage is available. */
+        msg_header h_cb;
 	    msg_set_header(cs_magic, CS_STORAGE_ALLOC_CALLBACK, lp->gid, &h_cb);
 
             resource_lp_get_reserved(sz, ns->st_tok, 1, lp, CODES_MCTX_DEFAULT,

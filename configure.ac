@@ -36,12 +36,9 @@ AC_TRY_COMPILE([#include <mpi.h>], [int ret = MPI_Init(0, (void*)0)],
                   line.])
 )
 
-# check for codes-base
-PKG_CHECK_EXISTS([codes-base], [],
-                  [AC_MSG_ERROR([Could not find working codes-base installation via pkg-config])])
 # check for codes-net (codes-base is implicit)
-PKG_CHECK_MODULES_STATIC([CODES_NET], [codes-net], [],
-                  [AC_MSG_ERROR([Could not find working codes-net installation via pkg-config])])
+PKG_CHECK_MODULES_STATIC([CODES], [codes], [],
+                  [AC_MSG_ERROR([Could not find working codes installation via pkg-config])])
 
 AC_CONFIG_FILES([Makefile])
 
