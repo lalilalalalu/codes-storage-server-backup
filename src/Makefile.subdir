@@ -15,4 +15,9 @@ src_libcodes_storage_server_a_SOURCES = \
 	src/client/dist.h \
 	src/client/dist.c \
 	src/client/oid-map.h \
-	src/client/oid-map.c
+	src/client/oid-map.c \
+	src/client/client-mul-wklds.c
+
+bin_PROGRAMS += src/client/client-mul-wklds
+src_client_client_mul_wklds_SOURCES = \
+ src/client/client-mul-wklds.c

@@ -40,7 +40,7 @@ struct codes_mctx const * const CODES_STORE_LP_MCTX = &codes_store_lp_mctx;
     do {if (CS_THREAD_DBG) printf(_fmt, __VA_ARGS__);} while (0)
 
 // lp specific debug messages (producing a coarser-grain log)
-#define CS_LP_DBG 0
+#define CS_LP_DBG 1
 #define lprintf(_fmt, ...) \
     do {if (CS_LP_DBG) printf(_fmt, __VA_ARGS__);} while (0)
 

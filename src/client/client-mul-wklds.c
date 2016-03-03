@@ -1,9 +1,7 @@
-/*
- * Copyright (C) 2015 University of Chicago.
+/* Copyright (C) 2015 University of Chicago.
  * See COPYRIGHT notice in top-level directory.
  *
  */
-
 #include <stdio.h>
 #include <stddef.h>
 #include <assert.h>
@@ -13,23 +11,43 @@
 #include <codes/jenkins-hash.h>
 #include <codes/codes-workload.h>
 #include <codes/model-net.h>
-
+#include <codes/codes-jobmap.h>
 #include "../codes/codes-store-lp.h"
-#include "test-checkpoint.h"
 
 #define CHK_LP_NM "test-checkpoint-client"
-#define MEAN_INTERVAL 10000000.0
-#define CLIENT_DBG 0
+#define MEAN_INTERVAL 1000000.0
+#define CLIENT_DBG 1
 #define MAX_PAYLOAD_SZ 2048
 #define TRACK 0
-#define GENERATE_TRAFFIC 0
+#define MAX_JOBS 5
+#define GENERATE_TRAFFIC 1
 #define dprintf(_fmt, ...) \
     do {if (CLIENT_DBG) printf(_fmt, __VA_ARGS__);} while (0)
 
-char workloads_conf_file[8192];
-char alloc_file[8192];
-int num_traces_of_job[5];
-char file_name_of_job[5][8192];
+void test_checkpoint_register(void);
+
+/* configures the lp given the global config object */
+void test_checkpoint_configure(int model_net_id);
+
+static char lp_io_dir[256] = {'\0'};
+static unsigned int lp_io_use_suffix = 0;
+static int do_lp_io = 0;
+static lp_io_handle io_handle;
+
+static char workloads_conf_file[4096] = {'\0'};
+static char alloc_file[4096] = {'\0'};
+static char conf_file_name[4096] = {'\0'};
+
+char anno[MAX_NAME_LENGTH];
+char lp_grp_name[MAX_NAME_LENGTH];
+char lp_name[MAX_NAME_LENGTH];
+static int mapping_gid, mapping_tid, mapping_rid, mapping_offset;
+
+int num_jobs_per_wkld[MAX_JOBS];
+char wkld_type_per_job[MAX_JOBS][4096];
+
+struct codes_jobmap_ctx *jobmap_ctx;
+struct codes_jobmap_params_list jobmap_p;
 
 /* checkpoint restart parameters */
 static double checkpoint_sz;
@@ -38,6 +56,8 @@ static double mtti;
 
 static int test_checkpoint_magic;
 static int cli_dfly_id;
+static int num_nw_lps;
+
 // following is for mapping clients to servers
 static int num_servers;
 static int num_clients;
@@ -82,6 +102,10 @@ struct test_checkpoint_state
 
     char output_buf[512];
     int64_t num_random_pckts;
+
+    /* For running multiple workloads */
+    int app_id;
+    int local_rank;
 };
 
 struct test_checkpoint_msg
@@ -110,6 +134,20 @@ static tw_stime s_to_ns(tw_stime ns)
 static double terabytes_to_megabytes(double tib)
 {
     return (tib * 1000.0 * 1000.0);
+}
+
+static void kickoff_synthetic_traffic(
+        struct test_checkpoint_state * ns,
+        tw_lp * lp)
+{
+        /* Generate random traffic during the delay */
+        tw_event * e;
+        struct test_checkpoint_msg * m_new;
+        tw_stime ts = (1.1 * g_tw_lookahead) + tw_rand_exponential(lp->rng, MEAN_INTERVAL);
+        e = codes_event_new(lp->gid, ts, lp);
+        m_new = tw_event_data(e);
+        msg_set_header(test_checkpoint_magic, CLI_BCKGND_GEN, lp->gid, &m_new->h);    
+        tw_event_send(e);
 }
 
 static void send_req_to_store_rc(
@@ -143,8 +181,8 @@ static void send_req_to_store(
     codes_store_send_req(&r, dest_server_id, lp, cli_dfly_id, CODES_MCTX_DEFAULT,
             0, &h, &ns->cb);
 
-    //if(lp->gid == TRACK)
-        dprintf("%lu: sent %s request\n", lp->gid, is_write ? "write" : "read");
+    if(lp->gid == TRACK)
+        dprintf("%llu: sent %s request\n", lp->gid, is_write ? "write" : "read");
 
     ns->write_start_time = tw_now(lp);
     ns->write_size += m->op_rc.u.write.size;
@@ -194,7 +232,7 @@ void complete_random_traffic(
    /* Record in some statistics? */ 
     ns->num_random_pckts++;
     if(lp->gid == TRACK)
-        dprintf("\n Packet %ld completed at time %lf ", ns->num_random_pckts, tw_now(lp));
+        dprintf("\n Packet %lld completed at time %lf ", ns->num_random_pckts, tw_now(lp));
 
 }
 void generate_random_traffic_rc(
@@ -226,58 +264,47 @@ void generate_random_traffic(
    b->c0 = 0;
    b->c1 = 0;
 
-   char anno[MAX_NAME_LENGTH];
-   struct test_checkpoint_msg * m_remote = malloc(sizeof(struct test_checkpoint_msg));
-   msg_set_header(test_checkpoint_magic, CLI_BCKGND_COMPLETE, lp->gid, &(m_remote->h));
+   tw_lpid global_dest_id; 
+   /* Get job information */
+   struct codes_jobmap_id jid; 
+   jid = codes_jobmap_to_local_id(ns->cli_rel_id, jobmap_ctx); 
 
-   char lp_grp_name[MAX_NAME_LENGTH];
-   char lp_name[MAX_NAME_LENGTH];
-
-   int mapping_gid, mapping_tid, mapping_rid, mapping_offset;
-   codes_mapping_get_lp_info(lp->gid, lp_grp_name, &mapping_gid, lp_name, &mapping_tid, NULL, &mapping_rid, &mapping_offset);
-
-   int num_clients = codes_mapping_get_lp_count(NULL, 0,
-           lp_name, NULL, 1);
-
-   tw_lpid dest_gid;
-   tw_lpid dest_svr = tw_rand_integer(lp->rng, 0, num_clients - 1);
-   
+   int num_clients = num_jobs_per_wkld[jid.job];
+   int dest_svr = tw_rand_integer(lp->rng, 0, num_clients - 1);
    if(dest_svr == ns->cli_rel_id)
        dest_svr = (dest_svr + 1) % num_clients;
 
-   codes_mapping_get_lp_id(lp_grp_name, lp_name, anno, 1, dest_svr, 0, &dest_gid );
+   struct test_checkpoint_msg * m_remote = malloc(sizeof(struct test_checkpoint_msg));
+   msg_set_header(test_checkpoint_magic, CLI_BCKGND_COMPLETE, lp->gid, &(m_remote->h));
+
+   codes_mapping_get_lp_info(lp->gid, lp_grp_name, &mapping_gid, lp_name, &mapping_tid, NULL, &mapping_rid, &mapping_offset);
+
+   jid.rank = dest_svr;
+   int intm_dest_id = codes_jobmap_to_global_id(jid, jobmap_ctx);
+
+   codes_mapping_get_lp_id(lp_grp_name, lp_name, NULL, 1,
+           intm_dest_id / num_nw_lps, intm_dest_id % num_nw_lps, &global_dest_id);
+
+   printf("\n Global dest id for %ld is %ld ", dest_svr, global_dest_id);
 
    int payload_sz = tw_rand_integer(lp->rng, 0, MAX_PAYLOAD_SZ);
-   //printf("\n LP ID %ld Dest gid is %ld ", lp->gid, dest_gid);
-   model_net_event(cli_dfly_id, "background-tr", dest_gid, payload_sz, 0.0, 
+   model_net_event(cli_dfly_id, "synthetic-tr", global_dest_id, payload_sz, 0.0, 
            sizeof(struct test_checkpoint_msg), (const void*)m_remote, 
            0, NULL, lp);
    msg->payload_sz = payload_sz;
 
-   if(tw_now(lp) < ns->delayed_time)
-   {
-        b->c1 = 1;
-        tw_stime ts = MEAN_INTERVAL + tw_rand_exponential(lp->rng, MEAN_INTERVAL); 
-        //if(lp->gid == TRACK)
-        //    printf("\n Received background traffic scheduling another after %lf ", tw_now(lp) + ts);
-        tw_event * e;
-        struct test_checkpoint_msg * m_new;
-        e = codes_event_new(lp->gid, ts, lp);
-        m_new = tw_event_data(e);
-        msg_set_header(test_checkpoint_magic, CLI_BCKGND_GEN, lp->gid, &(m_new->h));    
-        tw_event_send(e);
-   }
-   else
-   {
-      if(lp->gid == TRACK)
-          printf("\n Finished issuing random traffic, now generating checkpoints");
-      /* delay has ended, call next event */
-      b->c0 = 1;
-      handle_next_operation(ns, lp, codes_local_latency(lp));
-   }
+   /* New event after MEAN_INTERVAL */
+/*    tw_stime ts = (1.1 * g_tw_lookahead) + tw_rand_exponential(lp->rng, MEAN_INTERVAL); 
+    tw_event * e;
+    struct test_checkpoint_msg * m_new;
+    e = tw_event_new(lp->gid, ts, lp);
+    m_new = tw_event_data(e);
+    msg_set_header(test_checkpoint_magic, CLI_BCKGND_GEN, lp->gid, &(m_new->h));    
+    tw_event_send(e);
+*/
 }
 
-static void next(
+static void next_checkpoint_op(
         struct test_checkpoint_state * ns,
         tw_bf * bf,
         struct test_checkpoint_msg * msg,
@@ -286,16 +313,16 @@ static void next(
     if(ns->op_status_ct > 0)
     {
         char buf[64];
-        int written = sprintf(buf, "I/O workload operator error: %d  \n",lp->gid);
+        int written = sprintf(buf, "I/O workload operator error: %llu  \n",lp->gid);
 
-        lp_io_write(lp->gid, "errors", written, buf);
+        lp_io_write(lp->gid, "errors %d %s ", written, buf);
         return;
     }
 
     ns->op_status_ct++;
 
     struct codes_workload_op op_rc;
-    codes_workload_get_next(ns->wkld_id, 0, ns->cli_rel_id, &op_rc);
+    codes_workload_get_next(ns->wkld_id, ns->app_id, ns->cli_rel_id, &op_rc);
 
     /* save the op in the message */
     msg->op_rc = op_rc;
@@ -304,7 +331,7 @@ static void next(
     {
 		ns->completion_time = tw_now(lp);
         
-        if(lp->gid == TRACK)
+//        if(lp->gid == TRACK)
             dprintf("Client rank %d completed workload.\n", ns->cli_rel_id);
 		
         return;
@@ -314,7 +341,7 @@ static void next(
    {
 	case CODES_WK_BARRIER:
 	{
-        //if(lp->gid == TRACK)
+//        if(lp->gid == TRACK)
 		    dprintf("Client rank %d hit barrier.\n", ns->cli_rel_id);
 		
         handle_next_operation(ns, lp, codes_local_latency(lp));
@@ -323,31 +350,17 @@ static void next(
 
 	case CODES_WK_DELAY:
 	{
-        //if(lp->gid == TRACK)
+//        if(lp->gid == TRACK)
 		    dprintf("Client rank %d will delay for %lf seconds.\n", ns->cli_rel_id,
                 msg->op_rc.u.delay.seconds);
                 tw_stime nano_secs = s_to_ns(msg->op_rc.u.delay.seconds);
-#if GENERATE_TRAFFIC == 1      
-        msg->saved_delay_time = ns->delayed_time;
-        ns->delayed_time = tw_now(lp) + nano_secs;
-   
-        /* Generate random traffic during the delay */
-        tw_event * e;
-        struct test_checkpoint_msg * m_new;
-        tw_stime ts = MEAN_INTERVAL + tw_rand_exponential(lp->rng, MEAN_INTERVAL);
-        e = codes_event_new(lp->gid, ts, lp);
-        m_new = tw_event_data(e);
-        msg_set_header(test_checkpoint_magic, CLI_BCKGND_GEN, lp->gid, &m_new->h);    
-        tw_event_send(e);
-#else
         handle_next_operation(ns, lp, nano_secs);
-#endif
 	}
 	break;
 
     case CODES_WK_OPEN:
 	{
-        //if(lp->gid == TRACK)
+//        if(lp->gid == TRACK)
 		    dprintf("Client rank %d will open file id %ld \n ", ns->cli_rel_id,
 		    msg->op_rc.u.open.file_id);
 		handle_next_operation(ns, lp, codes_local_latency(lp));
@@ -356,16 +369,15 @@ static void next(
 	
 	case CODES_WK_CLOSE:
 	{	
-        //if(lp->gid == TRACK)
+//        if(lp->gid == TRACK)
 		    dprintf("Client rank %d will close file id %ld \n ", ns->cli_rel_id,
-		
-        msg->op_rc.u.close.file_id);
+                    msg->op_rc.u.close.file_id);
 		handle_next_operation(ns, lp, codes_local_latency(lp));
 	}
 	break;
 	case CODES_WK_WRITE:
 	{
-        //if(lp->gid == TRACK)
+//        if(lp->gid == TRACK)
 		    dprintf("Client rank %d initiate write operation size %ld offset %ld .\n", ns->cli_rel_id, 
 		
         msg->op_rc.u.write.size, msg->op_rc.u.write.offset);
@@ -375,7 +387,7 @@ static void next(
 
 	case CODES_WK_READ:
 	{
-        //if(lp->gid == TRACK)
+//        if(lp->gid == TRACK)
 		    dprintf("Client rank %d initiate write operation size %ld offset %ld .\n", ns->cli_rel_id, msg->op_rc.u.read.size, msg->op_rc.u.read.offset);
                 ns->num_sent_rd++;
 		send_req_to_store(ns, lp, msg, 0);
@@ -387,14 +399,14 @@ static void next(
       }
 	
 }
-static void next_rc(
+static void next_checkpoint_op_rc(
         struct test_checkpoint_state *ns,
         tw_bf * bf,
         struct test_checkpoint_msg *m,
         tw_lp *lp)
 {
     ns->op_status_ct--;
-    codes_workload_get_next_rc(ns->wkld_id, 0, ns->cli_rel_id, &m->op_rc);
+    codes_workload_get_next_rc(ns->wkld_id, ns->app_id, ns->cli_rel_id, &m->op_rc);
 
     if(m->op_rc.op_type == CODES_WK_END)
         return;
@@ -417,12 +429,7 @@ static void next_rc(
 
       case CODES_WK_DELAY:
       {
-#if GENERATE_TRAFFIC == 1 
-         ns->delayed_time = m->saved_delay_time;
-         tw_rand_reverse_unif(lp->rng);
-#else
          handle_next_operation_rc(ns, lp); 
-#endif
       }
       break;
       case CODES_WK_BARRIER:
@@ -459,7 +466,7 @@ static void test_checkpoint_event(
 
     switch(m->h.event_type) {
 	case CLI_NEXT_OP:
-		next(ns, b, m, lp);
+		next_checkpoint_op(ns, b, m, lp);
 	break;
 
 	case CLI_ACK:
@@ -501,7 +508,7 @@ static void test_checkpoint_event_rc(
     }
     switch(m->h.event_type) {
 	case CLI_NEXT_OP:	
-		next_rc(ns, b, m, lp);
+		next_checkpoint_op_rc(ns, b, m, lp);
 	break;
 	
 	case CLI_ACK:
@@ -545,15 +552,39 @@ static void test_checkpoint_init(
     ns->cli_rel_id = codes_mapping_get_lp_relative_id(lp->gid, 0, 0);
     ns->start_time = tw_now(lp);
 
-    handle_next_operation(ns, lp, codes_local_latency(lp));
-}
+   codes_mapping_get_lp_info(lp->gid, lp_grp_name, &mapping_gid, lp_name, &mapping_tid, NULL, &mapping_rid, &mapping_offset);
+    num_nw_lps = codes_mapping_get_lp_count(lp_grp_name, 1,"test-checkpoint-client", NULL, 1); 
 
-static void test_checkpoint_pre_run(
-        struct test_checkpoint_state *ns,
-        tw_lp *lp)
-{
+    struct codes_jobmap_id jid;
+    jid = codes_jobmap_to_local_id(ns->cli_rel_id, jobmap_ctx);
+    if(jid.job == -1)
+    {
+        printf("\n Client %d not generating traffic ", ns->cli_rel_id);
+        ns->app_id = -1;
+        ns->local_rank = -1;
+        return;
+    }
+
+    assert(jid.job < MAX_JOBS);
+
+    if(strcmp(wkld_type_per_job[jid.job], "synthetic") == 0)
+    {
+        printf("\n Rank %ld generating synthetic traffic ", lp->gid);
+        kickoff_synthetic_traffic(ns, lp);
+        ns->app_id = jid.job;
+    }
+    else if(strcmp(wkld_type_per_job[jid.job], "checkpoint") == 0)
+    {
+      printf("\n Rank %ld generating checkpoint traffic ", lp->gid);
       char* w_params = (char*)&c_params;
-      ns->wkld_id = codes_workload_load("checkpoint_io_workload", w_params, 0, ns->cli_rel_id);
+      ns->wkld_id = codes_workload_load("checkpoint_io_workload", w_params, ns->app_id, ns->cli_rel_id);
+      handle_next_operation(ns, lp, codes_local_latency(lp));
+    }
+    else
+      {
+        fprintf(stderr, "\n Invalid job id ");
+        assert(0);
+      }
 }
 
 static void test_checkpoint_finalize(
@@ -577,7 +608,7 @@ static void test_checkpoint_finalize(
 
 tw_lptype test_checkpoint_lp = {
     (init_f) test_checkpoint_init,
-    (pre_run_f) test_checkpoint_pre_run,
+    (pre_run_f) NULL,
     (event_f) test_checkpoint_event,
     (revent_f) test_checkpoint_event_rc,
     (final_f) test_checkpoint_finalize,
@@ -600,7 +631,6 @@ void test_checkpoint_configure(int model_net_id){
     rc = configuration_get_value_double(&config, "test-checkpoint-client", "checkpoint_sz", NULL,
 	   &c_params.checkpoint_sz);
 
-    
     assert(!rc);
 
     rc = configuration_get_value_double(&config, "test-checkpoint-client", "checkpoint_wr_bw", NULL,
@@ -629,6 +659,139 @@ void test_checkpoint_configure(int model_net_id){
         clients_per_server = 1;
 }
 
+const tw_optdef app_opt[] = {
+    TWOPT_GROUP("codes-store mock test model"),
+    TWOPT_CHAR("workload-conf-file", workloads_conf_file, "Workload allocation of participating ranks "),
+    TWOPT_CHAR("rank-alloc-file", alloc_file, "detailed rank allocation, which rank gets what workload "),
+    TWOPT_CHAR("codes-config", conf_file_name, "Name of codes configuration file"),
+    TWOPT_CHAR("lp-io-dir", lp_io_dir, "Where to place io output (unspecified -> no output"),
+    TWOPT_UINT("lp-io-use-suffix", lp_io_use_suffix, "Whether to append uniq suffix to lp-io directory (default 0)"),
+    TWOPT_END()
+};
+
+void Usage()
+{
+   if(tw_ismaster())
+    {
+        fprintf(stderr, "\n mpirun -np n ./client-mul-wklds --sync=1/3"
+                "--workload_conf_file = workload-conf-file --alloc_file = alloc-file"
+                "--conf=codes-config-file\n");
+    }
+}
+
+
+int main(int argc, char * argv[])
+{
+    int num_nets, *net_ids;
+    int model_net_id;
+    int simple_net_id;
+
+    g_tw_ts_end = s_to_ns(60*60*24*365); /* one year, in nsecs */
+
+    tw_opt_add(app_opt);
+    tw_init(&argc, &argv);
+
+    if(strlen(workloads_conf_file) == 0 || strlen(alloc_file) == 0 || !conf_file_name[0])
+    {
+        Usage();
+        MPI_Finalize();
+        return 1;
+    }
+
+    /* This file will have the names of workloads and the number of
+     * ranks that should be allocated to each of those workloads */
+    FILE * wkld_info_file = fopen(workloads_conf_file, "r+");
+    assert(wkld_info_file);
+
+    int i =0;
+    char separator = "\n";
+    while(!feof(wkld_info_file))
+    {
+        separator = fscanf(wkld_info_file, "%d %s", &num_jobs_per_wkld[i], wkld_type_per_job[i]);
+        if(separator != EOF)
+        {
+            printf("\n %d instances of workload %s ", num_jobs_per_wkld[i], wkld_type_per_job[i]);
+            i++;
+        }
+    }
+    /* loading the config file into the codes-mapping utility, giving us the
+     * parsed config object in return. 
+     * "config" is a global var defined by codes-mapping */
+    if (configuration_load(conf_file_name, MPI_COMM_WORLD, &config)){
+        fprintf(stderr, "Error loading config file %s.\n", conf_file_name);
+        MPI_Finalize();
+        return 1;
+    }
+
+    /* Now assign the alloc file to job map */
+    jobmap_p.alloc_file = alloc_file;
+    jobmap_ctx = codes_jobmap_configure(CODES_JOBMAP_LIST, &jobmap_p);
+
+    // register lps
+    lsm_register();
+    codes_store_register();
+    resource_lp_init();
+    test_checkpoint_register();
+    codes_ex_store_register();
+    model_net_register();
+
+    /* Setup takes the global config object, the registered LPs, and 
+     * generates/places the LPs as specified in the configuration file. 
+     * This should only be called after ALL LP types have been registered in 
+     * codes */
+    codes_mapping_setup();
+
+    /* Setup the model-net parameters specified in the global config object,
+     * returned is the identifier for the network type */
+    net_ids = model_net_configure(&num_nets);
+    
+    /* Network topology supported is either only simplenet
+     * OR dragonfly */
+    if(net_ids[0] != SIMPLENET)
+       assert(num_nets == 3 && net_ids[2] == SIMPLENET && net_ids[0] == DRAGONFLY);
+    else
+       assert(num_nets == 1);
+
+    model_net_id = net_ids[0];
+ 
+    if(net_ids[0] == DRAGONFLY)
+       simple_net_id = net_ids[2];
+    
+    free(net_ids);
+
+    /* after the mapping configuration is loaded, let LPs parse the
+     * configuration information. This is done so that LPs have access to
+     * the codes_mapping interface for getting LP counts and such */
+    codes_store_configure(model_net_id);
+    
+    if(num_nets > 1)
+       codes_store_set_scnd_net(simple_net_id);
+   
+    resource_lp_configure();
+    lsm_configure();
+    test_checkpoint_configure(model_net_id);
+
+
+    if (lp_io_dir[0]){
+        do_lp_io = 1;
+        /* initialize lp io */
+        int flags = lp_io_use_suffix ? LP_IO_UNIQ_SUFFIX : 0;
+        int ret = lp_io_prepare(lp_io_dir, flags, &io_handle, MPI_COMM_WORLD);
+        assert(ret == 0 || !"lp_io_prepare failure");
+    }
+
+    tw_run();
+
+    if (do_lp_io){
+        int ret = lp_io_flush(io_handle, MPI_COMM_WORLD);
+        assert(ret == 0 || !"lp_io_flush failure");
+    }
+
+    model_net_report_stats(model_net_id);
+    codes_jobmap_destroy(jobmap_ctx);
+    tw_end();
+    return 0;
+}
 /*
  * Local variables:
  *  c-indent-level: 4

@@ -81,7 +81,6 @@ int main(int argc, char * argv[])
     /* Setup the model-net parameters specified in the global config object,
      * returned is the identifier for the network type */
     net_ids = model_net_configure(&num_nets);
-    assert(num_nets == 2);
     dragonfly_net_id = net_ids[0];
     simple_net_id = net_ids[1];
     free(net_ids);
