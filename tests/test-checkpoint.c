@@ -24,7 +24,6 @@ static tw_stime s_to_ns(tw_stime s)
 
 static char conf_file_name[256] = {'\0'};
 static char lp_io_dir[256] = {'\0'};
-char cp_workload_type[256] = {'\0'};
 static unsigned int lp_io_use_suffix = 0;
 static int do_lp_io = 0;
 static lp_io_handle io_handle;
@@ -32,7 +31,6 @@ static lp_io_handle io_handle;
 const tw_optdef app_opt[] = {
     TWOPT_GROUP("codes-store mock test model"),
     TWOPT_CHAR("codes-config", conf_file_name, "Name of codes configuration file"),
-    TWOPT_CHAR("workload-type", cp_workload_type, " Type of suported workload is checkpoint_io_workload"),
     TWOPT_CHAR("lp-io-dir", lp_io_dir, "Where to place io output (unspecified -> no output"),
     TWOPT_UINT("lp-io-use-suffix", lp_io_use_suffix, "Whether to append uniq suffix to lp-io directory (default 0)"),
     TWOPT_END()

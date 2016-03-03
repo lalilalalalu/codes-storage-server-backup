@@ -559,7 +559,7 @@ static void test_checkpoint_init(
     jid = codes_jobmap_to_local_id(ns->cli_rel_id, jobmap_ctx);
     if(jid.job == -1)
     {
-        printf("\n Client %d not generating traffic ", ns->cli_rel_id);
+//        printf("\n Client %d not generating traffic ", ns->cli_rel_id);
         ns->app_id = -1;
         ns->local_rank = -1;
         return;
@@ -569,13 +569,13 @@ static void test_checkpoint_init(
 
     if(strcmp(wkld_type_per_job[jid.job], "synthetic") == 0)
     {
-        printf("\n Rank %ld generating synthetic traffic ", lp->gid);
+//        printf("\n Rank %ld generating synthetic traffic ", lp->gid);
         kickoff_synthetic_traffic(ns, lp);
         ns->app_id = jid.job;
     }
     else if(strcmp(wkld_type_per_job[jid.job], "checkpoint") == 0)
     {
-      printf("\n Rank %ld generating checkpoint traffic ", lp->gid);
+//      printf("\n Rank %ld generating checkpoint traffic ", lp->gid);
       char* w_params = (char*)&c_params;
       ns->wkld_id = codes_workload_load("checkpoint_io_workload", w_params, ns->app_id, ns->cli_rel_id);
       handle_next_operation(ns, lp, codes_local_latency(lp));
@@ -747,11 +747,6 @@ int main(int argc, char * argv[])
     
     /* Network topology supported is either only simplenet
      * OR dragonfly */
-    if(net_ids[0] != SIMPLENET)
-       assert(num_nets == 3 && net_ids[2] == SIMPLENET && net_ids[0] == DRAGONFLY);
-    else
-       assert(num_nets == 1);
-
     model_net_id = net_ids[0];
  
     if(net_ids[0] == DRAGONFLY)
