@@ -15,9 +15,10 @@
 #include "../codes/codes-store-lp.h"
 
 #define CHK_LP_NM "test-checkpoint-client"
-#define MEAN_INTERVAL 1000000.0
-#define CLIENT_DBG 1
-#define MAX_PAYLOAD_SZ 2048
+#define MEAN_INTERVAL 550055
+#define CLIENT_DBG 0
+#define MAX_DATA 1861980.697521
+#define PAYLOAD_SZ 1024
 #define TRACK 0
 #define MAX_JOBS 5
 #define GENERATE_TRAFFIC 1
@@ -32,11 +33,14 @@ void test_checkpoint_configure(int model_net_id);
 static char lp_io_dir[256] = {'\0'};
 static unsigned int lp_io_use_suffix = 0;
 static int do_lp_io = 0;
+static int extrapolate_factor = 10;
 static lp_io_handle io_handle;
 
 static char workloads_conf_file[4096] = {'\0'};
 static char alloc_file[4096] = {'\0'};
 static char conf_file_name[4096] = {'\0'};
+static int random_bb_nodes = 0;
+static int total_checkpoints = 0;
 
 char anno[MAX_NAME_LENGTH];
 char lp_grp_name[MAX_NAME_LENGTH];
@@ -57,12 +61,14 @@ static double mtti;
 static int test_checkpoint_magic;
 static int cli_dfly_id;
 static int num_nw_lps;
+static int num_bb_lps;
 
 // following is for mapping clients to servers
 static int num_servers;
 static int num_clients;
 static int clients_per_server;
 static double my_checkpoint_sz;
+static double intm_sleep = 0;
 
 static checkpoint_wrkld_params c_params = {0, 0, 0, 0, 0};
 
@@ -90,18 +96,25 @@ struct test_checkpoint_state
     int error_ct;
     tw_stime delayed_time;
     int num_completed_ops;
-    
+
+    /* Number of bursts for the uniform random traffic */
+    int num_bursts;
+
     tw_stime write_start_time;
     tw_stime total_write_time;
 
     uint64_t read_size;
     uint64_t write_size;
-    
+   
     int num_reads;
     int num_writes;
 
     char output_buf[512];
-    int64_t num_random_pckts;
+    int64_t syn_data_sz;
+    int64_t gen_data_sz;
+
+    /* For randomly selected BB nodes */
+    int random_bb_node_id;
 
     /* For running multiple workloads */
     int app_id;
@@ -113,6 +126,7 @@ struct test_checkpoint_msg
     msg_header h;
     int payload_sz;
     int tag;
+    int saved_data_sz;
     codes_store_ret_t ret;
     struct codes_workload_op op_rc;
     tw_stime saved_delay_time;
@@ -136,14 +150,22 @@ static double terabytes_to_megabytes(double tib)
     return (tib * 1000.0 * 1000.0);
 }
 
+static void kickoff_synthetic_traffic_rc(
+        struct test_checkpoint_state * ns,
+        tw_lp * lp)
+{
+    tw_rand_reverse_unif(lp->rng);
+}
+
 static void kickoff_synthetic_traffic(
         struct test_checkpoint_state * ns,
         tw_lp * lp)
 {
+        tw_stime nano_secs = s_to_ns(intm_sleep);
         /* Generate random traffic during the delay */
         tw_event * e;
         struct test_checkpoint_msg * m_new;
-        tw_stime ts = (1.1 * g_tw_lookahead) + tw_rand_exponential(lp->rng, MEAN_INTERVAL);
+        tw_stime ts = nano_secs + tw_rand_exponential(lp->rng, intm_sleep/10000);
         e = codes_event_new(lp->gid, ts, lp);
         m_new = tw_event_data(e);
         msg_set_header(test_checkpoint_magic, CLI_BCKGND_GEN, lp->gid, &m_new->h);    
@@ -170,14 +192,24 @@ static void send_req_to_store(
 
     codes_store_init_req(
             is_write? CSREQ_WRITE:CSREQ_READ, 0, 0, 
-	    is_write? m->op_rc.u.write.offset:m->op_rc.u.read.offset, 
+	        is_write? m->op_rc.u.write.offset:m->op_rc.u.read.offset, 
             is_write? m->op_rc.u.write.size:m->op_rc.u.read.size, 
             &r);
 
     msg_set_header(test_checkpoint_magic, CLI_ACK, lp->gid, &h);
-
     int dest_server_id = ns->cli_rel_id / clients_per_server;
-   
+
+    if(random_bb_nodes == 1)
+    {
+            if(ns->random_bb_node_id == -1)
+            {
+                dest_server_id = tw_rand_integer(lp->rng, 0, num_bb_lps - 1);
+                ns->random_bb_node_id = dest_server_id;
+            }
+            else
+                dest_server_id = ns->random_bb_node_id;
+    }
+
     codes_store_send_req(&r, dest_server_id, lp, cli_dfly_id, CODES_MCTX_DEFAULT,
             0, &h, &ns->cb);
 
@@ -220,7 +252,7 @@ void complete_random_traffic_rc(
     struct test_checkpoint_msg * msg,
     tw_lp * lp)
 {
-    ns->num_random_pckts--;
+    ns->syn_data_sz -= msg->payload_sz;
 }
 
 void complete_random_traffic(
@@ -229,10 +261,9 @@ void complete_random_traffic(
     struct test_checkpoint_msg * msg,
     tw_lp * lp)
 {
+    assert(ns->app_id != -1);
    /* Record in some statistics? */ 
-    ns->num_random_pckts++;
-    if(lp->gid == TRACK)
-        dprintf("\n Packet %lld completed at time %lf ", ns->num_random_pckts, tw_now(lp));
+    ns->syn_data_sz += msg->payload_sz;
 
 }
 void generate_random_traffic_rc(
@@ -241,10 +272,23 @@ void generate_random_traffic_rc(
       struct test_checkpoint_msg * msg,
       tw_lp * lp)
 {
+    if(b->c1)
+    {
+        ns->num_bursts--;
+
+        if(b->c0)
+        {
+            ns->gen_data_sz = msg->saved_data_sz;
+            kickoff_synthetic_traffic_rc(ns, lp);
+        }
+        return;
+    }
+
     tw_rand_reverse_unif(lp->rng);
     tw_rand_reverse_unif(lp->rng);
     
     model_net_event_rc(cli_dfly_id, lp, msg->payload_sz);
+    ns->gen_data_sz -= PAYLOAD_SZ;
 
     if(b->c1)
         tw_rand_reverse_unif(lp->rng);
@@ -261,9 +305,23 @@ void generate_random_traffic(
     struct test_checkpoint_msg * msg,
     tw_lp * lp)
 {
-   b->c0 = 0;
-   b->c1 = 0;
+   if(ns->gen_data_sz >= MAX_DATA * extrapolate_factor)
+   {
+        b->c1 = 1;
+        ns->num_bursts++;
+        dprintf("\n LP %ld completed sending data %lld completed at time %lf ", lp->gid, ns->gen_data_sz, tw_now(lp));
 
+        if(ns->num_bursts <= total_checkpoints)
+        {
+            b->c0 = 1;
+            msg->saved_data_sz = ns->gen_data_sz;
+            ns->gen_data_sz = 0;
+            kickoff_synthetic_traffic(ns, lp);
+        }
+       return;
+    }
+
+//   printf("\n LP %ld: completed %ld messages ", lp->gid, ns->num_random_pckts);
    tw_lpid global_dest_id; 
    /* Get job information */
    struct codes_jobmap_id jid; 
@@ -271,7 +329,7 @@ void generate_random_traffic(
 
    int num_clients = num_jobs_per_wkld[jid.job];
    int dest_svr = tw_rand_integer(lp->rng, 0, num_clients - 1);
-   if(dest_svr == ns->cli_rel_id)
+   if(dest_svr == ns->local_rank)
        dest_svr = (dest_svr + 1) % num_clients;
 
    struct test_checkpoint_msg * m_remote = malloc(sizeof(struct test_checkpoint_msg));
@@ -285,23 +343,21 @@ void generate_random_traffic(
    codes_mapping_get_lp_id(lp_grp_name, lp_name, NULL, 1,
            intm_dest_id / num_nw_lps, intm_dest_id % num_nw_lps, &global_dest_id);
 
-   printf("\n Global dest id for %ld is %ld ", dest_svr, global_dest_id);
+   m_remote->payload_sz = PAYLOAD_SZ;
+   ns->gen_data_sz += PAYLOAD_SZ;
 
-   int payload_sz = tw_rand_integer(lp->rng, 0, MAX_PAYLOAD_SZ);
-   model_net_event(cli_dfly_id, "synthetic-tr", global_dest_id, payload_sz, 0.0, 
+   model_net_event(cli_dfly_id, "synthetic-tr", global_dest_id, PAYLOAD_SZ, 0.0, 
            sizeof(struct test_checkpoint_msg), (const void*)m_remote, 
            0, NULL, lp);
-   msg->payload_sz = payload_sz;
 
    /* New event after MEAN_INTERVAL */
-/*    tw_stime ts = (1.1 * g_tw_lookahead) + tw_rand_exponential(lp->rng, MEAN_INTERVAL); 
+    tw_stime ts = MEAN_INTERVAL + tw_rand_exponential(lp->rng, MEAN_INTERVAL/10000); 
     tw_event * e;
     struct test_checkpoint_msg * m_new;
     e = tw_event_new(lp->gid, ts, lp);
     m_new = tw_event_data(e);
     msg_set_header(test_checkpoint_magic, CLI_BCKGND_GEN, lp->gid, &(m_new->h));    
     tw_event_send(e);
-*/
 }
 
 static void next_checkpoint_op(
@@ -310,6 +366,8 @@ static void next_checkpoint_op(
         struct test_checkpoint_msg * msg,
         tw_lp * lp)
 {
+    assert(ns->app_id != -1);
+
     if(ns->op_status_ct > 0)
     {
         char buf[64];
@@ -322,7 +380,7 @@ static void next_checkpoint_op(
     ns->op_status_ct++;
 
     struct codes_workload_op op_rc;
-    codes_workload_get_next(ns->wkld_id, ns->app_id, ns->cli_rel_id, &op_rc);
+    codes_workload_get_next(ns->wkld_id, 0, ns->cli_rel_id, &op_rc);
 
     /* save the op in the message */
     msg->op_rc = op_rc;
@@ -353,7 +411,7 @@ static void next_checkpoint_op(
 //        if(lp->gid == TRACK)
 		    dprintf("Client rank %d will delay for %lf seconds.\n", ns->cli_rel_id,
                 msg->op_rc.u.delay.seconds);
-                tw_stime nano_secs = s_to_ns(msg->op_rc.u.delay.seconds);
+        tw_stime nano_secs = s_to_ns(msg->op_rc.u.delay.seconds);
         handle_next_operation(ns, lp, nano_secs);
 	}
 	break;
@@ -406,7 +464,7 @@ static void next_checkpoint_op_rc(
         tw_lp *lp)
 {
     ns->op_status_ct--;
-    codes_workload_get_next_rc(ns->wkld_id, ns->app_id, ns->cli_rel_id, &m->op_rc);
+    codes_workload_get_next_rc(ns->wkld_id, 0, ns->cli_rel_id, &m->op_rc);
 
     if(m->op_rc.op_type == CODES_WK_END)
         return;
@@ -445,7 +503,6 @@ static void next_checkpoint_op_rc(
      default:
 	printf("\n Unknown client operation reverse %d", m->op_rc.op_type);
     }
-    
 }
 
 
@@ -545,7 +602,9 @@ static void test_checkpoint_init(
     ns->num_writes = 0;
     ns->read_size = 0;
     ns->write_size = 0;
-    ns->num_random_pckts = 0;
+    ns->syn_data_sz = 0;
+    ns->gen_data_sz = 0;
+    ns->random_bb_node_id = -1;
 
     INIT_CODES_CB_INFO(&ns->cb, struct test_checkpoint_msg, h, tag, ret);
 
@@ -555,29 +614,31 @@ static void test_checkpoint_init(
    codes_mapping_get_lp_info(lp->gid, lp_grp_name, &mapping_gid, lp_name, &mapping_tid, NULL, &mapping_rid, &mapping_offset);
     num_nw_lps = codes_mapping_get_lp_count(lp_grp_name, 1,"test-checkpoint-client", NULL, 1); 
 
+    num_bb_lps = codes_mapping_get_lp_count(lp_grp_name, 1, "codes-store", NULL, 1);
+
     struct codes_jobmap_id jid;
     jid = codes_jobmap_to_local_id(ns->cli_rel_id, jobmap_ctx);
     if(jid.job == -1)
     {
-//        printf("\n Client %d not generating traffic ", ns->cli_rel_id);
+ //       printf("\n Cli %ld not generating job ", ns->cli_rel_id);
         ns->app_id = -1;
         ns->local_rank = -1;
         return;
     }
 
+    ns->app_id = jid.job;
     assert(jid.job < MAX_JOBS);
 
     if(strcmp(wkld_type_per_job[jid.job], "synthetic") == 0)
     {
-//        printf("\n Rank %ld generating synthetic traffic ", lp->gid);
+//        printf("\n Rank %ld GID %ld generating synthetic traffic ", ns->cli_rel_id, lp->gid);
         kickoff_synthetic_traffic(ns, lp);
-        ns->app_id = jid.job;
     }
     else if(strcmp(wkld_type_per_job[jid.job], "checkpoint") == 0)
     {
 //      printf("\n Rank %ld generating checkpoint traffic ", lp->gid);
       char* w_params = (char*)&c_params;
-      ns->wkld_id = codes_workload_load("checkpoint_io_workload", w_params, ns->app_id, ns->cli_rel_id);
+      ns->wkld_id = codes_workload_load("checkpoint_io_workload", w_params, 0, ns->cli_rel_id);
       handle_next_operation(ns, lp, codes_local_latency(lp));
     }
     else
@@ -638,13 +699,18 @@ void test_checkpoint_configure(int model_net_id){
     assert(!rc);
 
     rc = configuration_get_value_int(&config, "test-checkpoint-client", "chkpoint_iters", NULL,
-	   &c_params.total_checkpoints);
+	   &total_checkpoints);
     assert(!rc);
+    c_params.total_checkpoints = total_checkpoints;
 
     rc = configuration_get_value_double(&config, "test-checkpoint-client", "mtti", NULL,
 	   &c_params.mtti);
     assert(!rc);
    
+    rc = configuration_get_value_double(&config, "test-checkpoint-client", "intm_delay", NULL,
+	   &intm_sleep);
+    assert(!rc);
+    
     num_servers =
         codes_mapping_get_lp_count(NULL, 0, CODES_STORE_LP_NAME, NULL, 1);
     num_clients =
@@ -666,6 +732,7 @@ const tw_optdef app_opt[] = {
     TWOPT_CHAR("codes-config", conf_file_name, "Name of codes configuration file"),
     TWOPT_CHAR("lp-io-dir", lp_io_dir, "Where to place io output (unspecified -> no output"),
     TWOPT_UINT("lp-io-use-suffix", lp_io_use_suffix, "Whether to append uniq suffix to lp-io directory (default 0)"),
+    TWOPT_UINT("random-bb", random_bb_nodes, "Whether use randomly selected burst buffer nodes or nearby nodes"),
     TWOPT_END()
 };
 
@@ -674,7 +741,7 @@ void Usage()
    if(tw_ismaster())
     {
         fprintf(stderr, "\n mpirun -np n ./client-mul-wklds --sync=1/3"
-                "--workload_conf_file = workload-conf-file --alloc_file = alloc-file"
+                "--workload-conf-file = workload-conf-file --alloc_file = alloc-file"
                 "--conf=codes-config-file\n");
     }
 }
@@ -734,6 +801,9 @@ int main(int argc, char * argv[])
     test_checkpoint_register();
     codes_ex_store_register();
     model_net_register();
+
+    /* model-net enable sampling */
+//    model_net_enable_sampling(500000000, 1500000000000);
 
     /* Setup takes the global config object, the registered LPs, and 
      * generates/places the LPs as specified in the configuration file. 
