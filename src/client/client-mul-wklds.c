@@ -16,7 +16,7 @@
 
 #define CHK_LP_NM "test-checkpoint-client"
 #define MEAN_INTERVAL 550055
-#define CLIENT_DBG 0
+#define CLIENT_DBG 1
 #define MAX_DATA 1861980.697521
 #define PAYLOAD_SZ 1024
 #define TRACK 0
@@ -69,6 +69,10 @@ static int num_clients;
 static int clients_per_server;
 static double my_checkpoint_sz;
 static double intm_sleep = 0;
+static tw_stime max_write_time = 0;
+static tw_stime max_total_time = 0;
+static tw_stime total_write_time = 0;
+static tw_stime total_run_time = 0;
 
 static checkpoint_wrkld_params c_params = {0, 0, 0, 0, 0};
 
@@ -620,7 +624,7 @@ static void test_checkpoint_init(
     jid = codes_jobmap_to_local_id(ns->cli_rel_id, jobmap_ctx);
     if(jid.job == -1)
     {
- //       printf("\n Cli %ld not generating job ", ns->cli_rel_id);
+//        printf("\n Cli %ld not generating job ", ns->cli_rel_id);
         ns->app_id = -1;
         ns->local_rank = -1;
         return;
@@ -631,12 +635,12 @@ static void test_checkpoint_init(
 
     if(strcmp(wkld_type_per_job[jid.job], "synthetic") == 0)
     {
-//        printf("\n Rank %ld GID %ld generating synthetic traffic ", ns->cli_rel_id, lp->gid);
+        //printf("\n Rank %ld GID %ld generating synthetic traffic ", ns->cli_rel_id, lp->gid);
         kickoff_synthetic_traffic(ns, lp);
     }
     else if(strcmp(wkld_type_per_job[jid.job], "checkpoint") == 0)
     {
-//      printf("\n Rank %ld generating checkpoint traffic ", lp->gid);
+      //printf("\n Rank %ld generating checkpoint traffic ", lp->gid);
       char* w_params = (char*)&c_params;
       ns->wkld_id = codes_workload_load("checkpoint_io_workload", w_params, 0, ns->cli_rel_id);
       handle_next_operation(ns, lp, codes_local_latency(lp));
@@ -659,11 +663,24 @@ static void test_checkpoint_finalize(
         tw_error(TW_LOC, "num_complete_rd:%d does not match num_reqs:%d\n",
                 ns->num_complete_rd, num_reqs);
     */
+   struct codes_jobmap_id jid; 
+   jid = codes_jobmap_to_local_id(ns->cli_rel_id, jobmap_ctx); 
+    
+   if(max_write_time < ns->total_write_time)
+        max_write_time = ns->total_write_time;
+
+    total_write_time += ns->total_write_time;
+
+    if(tw_now(lp) - ns->start_time > max_total_time)
+        max_total_time = tw_now(lp) - ns->start_time;
+
+    total_run_time += (tw_now(lp) - ns->start_time);
+
    int written = 0;
    if(!ns->cli_rel_id)
-      written = sprintf(ns->output_buf, "# Format <LP id> <Bytes written> <Time to write bytes >");
+      written = sprintf(ns->output_buf, "# Format <LP id> <Workload type> <Bytes written> <Time to write bytes > <Total elapsed time>");
    
-   written += sprintf(ns->output_buf + written, "%lu %lu %ld %lf \n", lp->gid, ns->cli_rel_id, ns->write_size, ns->total_write_time);
+   written += sprintf(ns->output_buf + written, "%lu %s %lu %ld %lf %lf\n", lp->gid, wkld_type_per_job[jid.job], ns->cli_rel_id, ns->write_size, ns->total_write_time, tw_now(lp) - ns->start_time);
    lp_io_write(lp->gid, "checkpoint-client-stats", written, ns->output_buf);   
 }
 
@@ -846,6 +863,15 @@ int main(int argc, char * argv[])
     }
 
     tw_run();
+
+    double g_max_total_time, g_max_write_time, g_avg_time, g_avg_write_time;
+    MPI_Reduce(&max_total_time, &g_max_total_time, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);  
+    MPI_Reduce(&max_write_time, &g_max_write_time, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);  
+    MPI_Reduce(&total_write_time, &g_avg_write_time, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);  
+    MPI_Reduce(&total_run_time, &g_avg_time, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);  
+   
+    printf("\n Maximum time spent by compute nodes %lf Maximum time spent in write operatuons %lf", g_max_total_time, g_max_write_time);
+    printf("\n Avg time spent by compute nodes %lf Avg time spent in write operatuons %lf\n", g_avg_time, g_avg_write_time);
 
     if (do_lp_io){
         int ret = lp_io_flush(io_handle, MPI_COMM_WORLD);
