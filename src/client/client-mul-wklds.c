@@ -176,6 +176,8 @@ static void kickoff_synthetic_traffic(
         struct test_checkpoint_state * ns,
         tw_lp * lp)
 {
+        ns->is_finished = 0;
+
         tw_stime nano_secs = s_to_ns(intm_sleep);
         /* Generate random traffic during the delay */
         tw_event * e;
@@ -216,7 +218,6 @@ static void notify_background_traffic(
 
         int num_other_ranks = codes_jobmap_get_num_ranks(other_id, jobmap_ctx);
 
-        printf("\n Other ranks %ld ", num_other_ranks);
         tw_stime ts = (1.1 * g_tw_lookahead) + tw_rand_exponential(lp->rng, MEAN_INTERVAL/10000);
         tw_lpid global_dest_id;
  
@@ -399,6 +400,7 @@ void finish_bckgnd_traffic_rc(
     tw_lp * lp)
 {
         ns->num_bursts--;
+        ns->is_finished = 0;
 
         if(b->c0)
         {
@@ -413,8 +415,13 @@ void finish_bckgnd_traffic(
     struct test_checkpoint_msg * msg,
     tw_lp * lp)
 {
+        if(ns->num_bursts > total_checkpoints || ns->num_bursts < 0)
+        {
+            tw_lp_suspend(lp, 0, 0);
+            return;
+        }
         ns->num_bursts++;
-        assert(ns->num_bursts <= total_checkpoints);
+        ns->is_finished = 1;
 
         dprintf("\n LP %llu completed sending data %lld completed at time %lf ", lp->gid, ns->gen_data_sz, tw_now(lp));
 
@@ -455,6 +462,9 @@ void generate_random_traffic_rc(
       struct test_checkpoint_msg * msg,
       tw_lp * lp)
 {
+    if(b->c8)
+        return;
+
     tw_rand_reverse_unif(lp->rng);
     tw_rand_reverse_unif(lp->rng);
     
@@ -468,6 +478,11 @@ void generate_random_traffic(
     struct test_checkpoint_msg * msg,
     tw_lp * lp)
 {
+    if(ns->is_finished == 1)
+    {
+        b->c8 = 1;
+        return;
+    }
 //   printf("\n LP %ld: completed %ld messages ", lp->gid, ns->num_random_pckts);
     tw_lpid global_dest_id; 
    /* Get job information */
@@ -777,6 +792,7 @@ static void test_checkpoint_init(
     ns->total_write_time = 0.0;
     ns->completion_time = 0;
     ns->is_finished = 0;
+    ns->num_bursts = 0;
 
     ns->num_reads = 0;
     ns->num_writes = 0;
