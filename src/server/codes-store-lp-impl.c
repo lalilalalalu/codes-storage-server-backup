@@ -172,6 +172,7 @@ tw_lptype cs_lp = {
     (pre_run_f) cs_pre_run,
     (event_f) cs_event_handler,
     (revent_f) cs_event_handler_rc,
+    (commit_f) NULL,
     (final_f) cs_finalize,
     (map_f) codes_mapping,
     sizeof(cs_state),
@@ -921,7 +922,7 @@ static void handle_complete_disk_op(
 	    ns->bytes_st_for_drain += p->committed;
 	    if(ns->bytes_st_for_drain >= bb_threshold)
 	    {
-           lprintf("\n Draining burst buffer node %ld ", ns->server_index);
+           printf("\n Draining burst buffer node %ld ", ns->server_index);
 		   codes_ex_store_send_req(srv_ext_mn_id, bb_threshold,
                            CODES_STORE_LP_MCTX, lp);
                    ns->bytes_st_for_drain -= bb_threshold;

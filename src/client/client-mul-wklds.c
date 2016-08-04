@@ -19,8 +19,7 @@
 
 #define CHK_LP_NM "test-checkpoint-client"
 #define MEAN_INTERVAL 550055
-#define CLIENT_DBG 0
-#define MAX_DATA 1861980.697521
+#define CLIENT_DBG 1
 #define PAYLOAD_SZ 1024
 #define TRACK 0
 #define MAX_JOBS 5
@@ -138,6 +137,7 @@ struct test_checkpoint_state
 
 struct test_checkpoint_msg
 {
+    model_net_event_return event_rc;
     msg_header h;
     int payload_sz;
     int tag;
@@ -259,6 +259,9 @@ static void notify_neighbor(
         tw_bf * bf,
         struct test_checkpoint_msg * m)
 {
+    bf->c0 = 0;
+    bf->c1 = 0;
+
     if(ns->local_rank == num_chk_clients - 1 
             && ns->is_finished == 1)
     {
@@ -456,6 +459,7 @@ void finish_nbr_wkld(
 
     notify_neighbor(ns, lp, b, msg);
 }
+
 void generate_random_traffic_rc(
       struct test_checkpoint_state * ns,
       tw_bf * b,
@@ -468,7 +472,8 @@ void generate_random_traffic_rc(
     tw_rand_reverse_unif(lp->rng);
     tw_rand_reverse_unif(lp->rng);
     
-    model_net_event_rc(cli_dfly_id, lp, PAYLOAD_SZ);
+//    model_net_event_rc2(cli_dfly_id, lp, PAYLOAD_SZ);
+    model_net_event_rc2(lp, &msg->event_rc);
     ns->gen_data_sz -= PAYLOAD_SZ;
 }
 
@@ -493,6 +498,7 @@ void generate_random_traffic(
    if(dest_svr == ns->local_rank)
        dest_svr = (dest_svr + 1) % num_syn_clients;
 
+//   dprintf("\n Cli %ld data size %lu ", ns->cli_rel_id, ns->syn_data_sz);
    struct test_checkpoint_msg * m_remote = malloc(sizeof(struct test_checkpoint_msg));
    msg_set_header(test_checkpoint_magic, CLI_BCKGND_COMPLETE, lp->gid, &(m_remote->h));
 
@@ -696,6 +702,12 @@ static void test_checkpoint_event(
         ns->error_ct++;
         return;
     }
+    if(m->h.magic != test_checkpoint_magic)
+        printf("\n Msg magic %d checkpoint magic %d event-type %d src %llu ", m->h.magic, 
+               test_checkpoint_magic,
+               m->h.event_type,
+               m->h.src);
+
     assert(m->h.magic == test_checkpoint_magic);
 
     switch(m->h.event_type) {
@@ -810,6 +822,7 @@ static void test_checkpoint_init(
 
    codes_mapping_get_lp_info(lp->gid, lp_grp_name, &mapping_gid, lp_name, &mapping_tid, NULL, &mapping_rid, &mapping_offset);
 
+//   printf("\n Client lp id %llu ", lp->gid);
     struct codes_jobmap_id jid;
     jid = codes_jobmap_to_local_id(ns->cli_rel_id, jobmap_ctx);
     if(jid.job == -1)
@@ -883,6 +896,7 @@ tw_lptype test_checkpoint_lp = {
     (pre_run_f) NULL,
     (event_f) test_checkpoint_event,
     (revent_f) test_checkpoint_event_rc,
+    (commit_f) NULL,
     (final_f) test_checkpoint_finalize,
     (map_f) codes_mapping,
     sizeof(struct test_checkpoint_state),
@@ -952,7 +966,7 @@ void Usage()
     {
         fprintf(stderr, "\n mpirun -np n ./client-mul-wklds --sync=1/3"
                 "--workload-conf-file = workload-conf-file --alloc_file = alloc-file"
-                "--conf=codes-config-file\n");
+                "--codes-config=codes-config-file\n");
     }
 }
 

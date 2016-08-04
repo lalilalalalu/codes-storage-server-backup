@@ -56,6 +56,7 @@ tw_lptype es_lp = {
     (pre_run_f) NULL,
     (event_f) es_event_handler,
     (revent_f) es_event_handler_rc,
+    (commit_f) NULL,
     (final_f) es_finalize,
     (map_f) codes_mapping,
     sizeof(es_state_t),
