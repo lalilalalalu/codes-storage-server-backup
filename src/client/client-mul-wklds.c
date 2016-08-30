@@ -23,7 +23,6 @@
 #define PAYLOAD_SZ 1024
 #define TRACK 0
 #define MAX_JOBS 5
-#define GENERATE_TRAFFIC 1
 #define dprintf(_fmt, ...) \
     do {if (CLIENT_DBG) printf(_fmt, __VA_ARGS__);} while (0)
 
@@ -119,7 +118,8 @@ struct test_checkpoint_state
 
     uint64_t read_size;
     uint64_t write_size;
-   
+
+
     int num_reads;
     int num_writes;
 
@@ -142,8 +142,9 @@ struct test_checkpoint_msg
     int payload_sz;
     int tag;
     int saved_data_sz;
+    uint64_t saved_write_sz;
+    int saved_op_type;
     codes_store_ret_t ret;
-    struct codes_workload_op op_rc;
     tw_stime saved_delay_time;
     tw_stime saved_write_time;
 };
@@ -179,6 +180,7 @@ static void kickoff_synthetic_traffic(
         ns->is_finished = 0;
 
         tw_stime nano_secs = s_to_ns(intm_sleep);
+        ns->start_time = tw_now(lp) + nano_secs;
         /* Generate random traffic during the delay */
         tw_event * e;
         struct test_checkpoint_msg * m_new;
@@ -192,8 +194,7 @@ static void kickoff_synthetic_traffic(
 static void notify_background_traffic_rc(
 	    struct test_checkpoint_state * ns,
         tw_lp * lp,
-        tw_bf * bf,
-        struct test_checkpoint_msg * m)
+        tw_bf * bf)
 {
     tw_rand_reverse_unif(lp->rng); 
 }
@@ -221,7 +222,7 @@ static void notify_background_traffic(
         tw_stime ts = (1.1 * g_tw_lookahead) + tw_rand_exponential(lp->rng, MEAN_INTERVAL/10000);
         tw_lpid global_dest_id;
  
-        dprintf("\n Checkpoint LP %ld lpid %ld notifying background traffic!!! ", lp->gid, ns->local_rank);
+        dprintf("\n Checkpoint LP %llu lpid %d notifying background traffic!!! ", lp->gid, ns->local_rank);
         for(int k = 0; k < num_other_ranks; k++)    
         {
             other_jid.rank = k;
@@ -240,12 +241,11 @@ static void notify_background_traffic(
 static void notify_neighbor_rc(
 	    struct test_checkpoint_state * ns,
         tw_lp * lp,
-        tw_bf * bf,
-        struct test_checkpoint_msg * m)
+        tw_bf * bf)
 {
        if(bf->c0)
        {
-            notify_background_traffic_rc(ns, lp, bf, m);
+            notify_background_traffic_rc(ns, lp, bf);
        }
    
        if(bf->c1)
@@ -305,14 +305,19 @@ static void send_req_to_store_rc(
         {
            tw_rand_reverse_unif(lp->rng);
         }
-	    codes_store_send_req_rc(cli_dfly_id, lp);	
-        ns->write_size -= m->op_rc.u.write.size;
+	    codes_store_send_req_rc(cli_dfly_id, lp);
+        
+        if(bf->c10)
+        {
+            ns->write_size = m->saved_write_sz;
+        }
 }
 
 static void send_req_to_store(
-	struct test_checkpoint_state * ns,
+	    struct test_checkpoint_state * ns,
         tw_lp * lp,
         tw_bf * bf,
+        struct codes_workload_op * op_rc,
         struct test_checkpoint_msg * m,
         int is_write)
 {
@@ -321,8 +326,8 @@ static void send_req_to_store(
 
     codes_store_init_req(
             is_write? CSREQ_WRITE:CSREQ_READ, 0, 0, 
-	        is_write? m->op_rc.u.write.offset:m->op_rc.u.read.offset, 
-            is_write? m->op_rc.u.write.size:m->op_rc.u.read.size, 
+	        is_write? op_rc->u.write.offset:op_rc->u.read.offset, 
+            is_write? op_rc->u.write.size:op_rc->u.read.size, 
             &r);
 
     msg_set_header(test_checkpoint_magic, CLI_ACK, lp->gid, &h);
@@ -346,8 +351,13 @@ static void send_req_to_store(
     //if(ns->cli_rel_id == TRACK)
         dprintf("%llu: sent %s request\n", lp->gid, is_write ? "write" : "read");
 
-    ns->write_start_time = tw_now(lp);
-    ns->write_size += m->op_rc.u.write.size;
+    if(is_write)
+    {
+        bf->c10 = 1;
+        m->saved_write_sz = ns->write_size;
+        ns->write_start_time = tw_now(lp);
+        ns->write_size += op_rc->u.write.size;
+    }
 }
 
 void handle_next_operation_rc(
@@ -394,7 +404,6 @@ void complete_random_traffic(
     assert(ns->app_id != -1);
    /* Record in some statistics? */ 
     ns->syn_data_sz += msg->payload_sz;
-
 }
 void finish_bckgnd_traffic_rc(
     struct test_checkpoint_state * ns,
@@ -446,7 +455,7 @@ void finish_nbr_wkld_rc(
 {
     ns->neighbor_completed = 0;
     
-    notify_neighbor_rc(ns, lp, b, msg);
+    notify_neighbor_rc(ns, lp, b);
 }
 
 void finish_nbr_wkld(
@@ -483,7 +492,7 @@ void generate_random_traffic(
     struct test_checkpoint_msg * msg,
     tw_lp * lp)
 {
-    if(ns->is_finished == 1)
+    if(ns->is_finished == 1 || ns->gen_data_sz >= 5000000) 
     {
         b->c8 = 1;
         return;
@@ -512,7 +521,7 @@ void generate_random_traffic(
    m_remote->payload_sz = PAYLOAD_SZ;
    ns->gen_data_sz += PAYLOAD_SZ;
 
-   model_net_event(cli_dfly_id, "synthetic-tr", global_dest_id, PAYLOAD_SZ, 0.0, 
+   msg->event_rc  = model_net_event(cli_dfly_id, "synthetic-tr", global_dest_id, PAYLOAD_SZ, 0.0, 
            sizeof(struct test_checkpoint_msg), (const void*)m_remote, 
            0, NULL, lp);
 
@@ -545,13 +554,11 @@ static void next_checkpoint_op(
 
     ns->op_status_ct++;
 
-    struct codes_workload_op op_rc;
-    codes_workload_get_next(ns->wkld_id, 0, ns->cli_rel_id, &op_rc);
+    struct codes_workload_op * op_rc = malloc(sizeof(struct codes_workload_op));
+    codes_workload_get_next(ns->wkld_id, 0, ns->cli_rel_id, op_rc);
 
-    /* save the op in the message */
-    msg->op_rc = op_rc;
-   
-    if(op_rc.op_type == CODES_WK_END)
+    msg->saved_op_type = op_rc->op_type;
+    if(op_rc->op_type == CODES_WK_END)
     {
 	    ns->completion_time = tw_now(lp);
         ns->is_finished = 1; 
@@ -567,17 +574,18 @@ static void next_checkpoint_op(
          * checkpoint has completed then we send a notification to the next
          * rank */
          notify_neighbor(ns, lp, bf, msg);
-//    if(ns->cli_rel_id == TRACK)
-            dprintf("Client rank %d completed workload.\n", ns->cli_rel_id);
+         
+         if(ns->cli_rel_id == TRACK)
+            tw_output(lp, "Client rank %d completed workload.\n", ns->cli_rel_id);
 		
         return;
     }
-    switch(op_rc.op_type)
+    switch(op_rc->op_type)
    {
 	case CODES_WK_BARRIER:
 	{
 //        if(ns->cli_rel_id == TRACK)
-		    dprintf("Client rank %d hit barrier.\n", ns->cli_rel_id);
+		   tw_output(lp, "Client rank %d hit barrier.\n", ns->cli_rel_id);
 		
         handle_next_operation(ns, lp, codes_local_latency(lp));
 	}
@@ -586,9 +594,9 @@ static void next_checkpoint_op(
 	case CODES_WK_DELAY:
 	{
 //        if(ns->cli_rel_id == TRACK)
-		    dprintf("Client rank %d will delay for %lf seconds.\n", ns->cli_rel_id,
-                msg->op_rc.u.delay.seconds);
-        tw_stime nano_secs = s_to_ns(msg->op_rc.u.delay.seconds);
+		    tw_output(lp, "Client rank %d will delay for %lf seconds.\n", ns->cli_rel_id,
+                op_rc->u.delay.seconds);
+        tw_stime nano_secs = s_to_ns(op_rc->u.delay.seconds);
         handle_next_operation(ns, lp, nano_secs);
 	}
 	break;
@@ -596,8 +604,8 @@ static void next_checkpoint_op(
     case CODES_WK_OPEN:
 	{
 //        if(ns->cli_rel_id == TRACK)
-		    dprintf("Client rank %d will open file id %ld \n ", ns->cli_rel_id,
-		    msg->op_rc.u.open.file_id);
+		   tw_output(lp, "Client rank %d will open file id %llu \n ", ns->cli_rel_id,
+		    op_rc->u.open.file_id);
 		handle_next_operation(ns, lp, codes_local_latency(lp));
 	}
 	break;
@@ -605,32 +613,33 @@ static void next_checkpoint_op(
 	case CODES_WK_CLOSE:
 	{	
 //        if(ns->cli_rel_id == TRACK)
-		    dprintf("Client rank %d will close file id %ld \n ", ns->cli_rel_id,
-                    msg->op_rc.u.close.file_id);
+		    tw_output(lp, "Client rank %d will close file id %llu \n ", ns->cli_rel_id,
+                    op_rc->u.close.file_id);
 		handle_next_operation(ns, lp, codes_local_latency(lp));
 	}
 	break;
 	case CODES_WK_WRITE:
 	{
 //        if(ns->cli_rel_id == TRACK)
-		    dprintf("Client rank %d initiate write operation size %ld offset %ld .\n", ns->cli_rel_id, 
-	            msg->op_rc.u.write.size, msg->op_rc.u.write.offset);
-		send_req_to_store(ns, lp, bf, msg, 1);
+		    tw_output(lp, "Client rank %d initiate write operation size %ld offset %ld .\n", ns->cli_rel_id, 
+	            op_rc->u.write.size, op_rc->u.write.offset);
+		send_req_to_store(ns, lp, bf, op_rc, msg, 1);
     }	
 	break;
 
 	case CODES_WK_READ:
 	{
 //        if(ns->cli_rel_id == TRACK)
-		    dprintf("Client rank %d initiate write operation size %ld offset %ld .\n", ns->cli_rel_id, msg->op_rc.u.read.size, msg->op_rc.u.read.offset);
+		    tw_output(lp, "Client rank %d initiate write operation size %ld offset %ld .\n", ns->cli_rel_id, op_rc->u.read.size, op_rc->u.read.offset);
                 ns->num_sent_rd++;
-		send_req_to_store(ns, lp, bf, msg, 0);
+		send_req_to_store(ns, lp, bf, op_rc, msg, 0);
     }
 	break;
 
 	default:
-	      printf("\n Unknown client operation %d ", msg->op_rc.op_type);
+	      printf("\n Unknown client operation %d ", op_rc->op_type);
       }
+    free(op_rc);
 	
 }
 static void next_checkpoint_op_rc(
@@ -640,19 +649,19 @@ static void next_checkpoint_op_rc(
         tw_lp *lp)
 {
     ns->op_status_ct--;
-    codes_workload_get_next_rc(ns->wkld_id, 0, ns->cli_rel_id, &m->op_rc);
+    codes_workload_get_next_rc2(ns->wkld_id, 0, ns->cli_rel_id);
 
-    if(m->op_rc.op_type == CODES_WK_END)
+    if(m->saved_op_type == CODES_WK_END)
     {
         ns->is_finished = 0; 
        
         if(bf->c9)
             return;
 
-        notify_neighbor_rc(ns, lp, bf, m);
+        notify_neighbor_rc(ns, lp, bf);
         return;
     }
-    switch(m->op_rc.op_type) 
+    switch(m->saved_op_type) 
     {
       case CODES_WK_READ:
       {
@@ -684,7 +693,7 @@ static void next_checkpoint_op_rc(
 
 
      default:
-	printf("\n Unknown client operation reverse %d", m->op_rc.op_type);
+	printf("\n Unknown client operation reverse %d", m->saved_op_type);
     }
 }
 
@@ -880,7 +889,6 @@ static void test_checkpoint_finalize(
         max_total_time = tw_now(lp) - ns->start_time;
 
     total_run_time += (tw_now(lp) - ns->start_time);
-
     total_syn_data += ns->syn_data_sz;
 
    int written = 0;
@@ -941,8 +949,8 @@ void test_checkpoint_configure(int model_net_id){
     num_clients = 
         codes_mapping_get_lp_count(NULL, 0, CHK_LP_NM, NULL, 1);
 
-    c_params.nprocs = num_clients;
-    my_checkpoint_sz = terabytes_to_megabytes(c_params.checkpoint_sz)/num_clients;
+    c_params.nprocs = num_chk_clients;
+    my_checkpoint_sz = terabytes_to_megabytes(c_params.checkpoint_sz)/num_chk_clients;
 
     clients_per_server = num_clients / num_servers;
     if (clients_per_server == 0)
@@ -1084,11 +1092,14 @@ int main(int argc, char * argv[])
     MPI_Reduce(&total_write_time, &g_avg_write_time, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);  
     MPI_Reduce(&total_syn_data, &g_total_syn_data, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);  
     MPI_Reduce(&total_run_time, &g_avg_time, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);  
-   
-    printf("\n Maximum time spent by compute nodes %lf Maximum time spent in write operations %lf", g_max_total_time, g_max_write_time);
-    printf("\n Avg time spent by compute nodes %lf Avg time spent in write operations %lf\n", g_avg_time/num_clients, g_avg_write_time/num_chk_clients);
+  
+    if(!g_tw_mynode)
+    {
+        printf("\n Maximum time spent by compute nodes %lf Maximum time spent in write operations %lf", g_max_total_time, g_max_write_time);
+        printf("\n Avg time spent by compute nodes %lf Avg time spent in write operations %lf\n", g_avg_time/num_clients, g_avg_write_time/num_chk_clients);
 
-    printf("\n Synthetic traffic stats: data received per proc %lf ", total_syn_data/num_syn_clients);
+        printf("\n Synthetic traffic stats: data received per proc %lf ", total_syn_data/num_syn_clients);
+    }
     if (do_lp_io){
         int ret = lp_io_flush(io_handle, MPI_COMM_WORLD);
         assert(ret == 0 || !"lp_io_flush failure");
