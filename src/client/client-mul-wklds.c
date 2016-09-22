@@ -20,7 +20,6 @@
 #define CHK_LP_NM "test-checkpoint-client"
 #define MEAN_INTERVAL 550055
 #define CLIENT_DBG 1
-#define PAYLOAD_SZ 1024
 #define TRACK 0
 #define MAX_JOBS 5
 #define dprintf(_fmt, ...) \
@@ -36,6 +35,8 @@ static unsigned int lp_io_use_suffix = 0;
 static int do_lp_io = 0;
 static int extrapolate_factor = 10;
 static lp_io_handle io_handle;
+static unsigned int PAYLOAD_SZ=1024;
+static unsigned int MAX_DATA_SZ = 5000000000;
 
 static char workloads_conf_file[4096] = {'\0'};
 static char alloc_file[4096] = {'\0'};
@@ -70,7 +71,6 @@ static int num_syn_clients;
 static int num_chk_clients;
 
 static double my_checkpoint_sz;
-static double intm_sleep = 0;
 static tw_stime max_write_time = 0;
 static tw_stime max_total_time = 0;
 static tw_stime total_write_time = 0;
@@ -179,12 +179,18 @@ static void kickoff_synthetic_traffic(
 {
         ns->is_finished = 0;
 
-        tw_stime nano_secs = s_to_ns(intm_sleep);
+        double checkpoint_wr_time = (c_params.checkpoint_sz * 1024)/ c_params.checkpoint_wr_bw;
+        tw_stime checkpoint_interval = sqrt(2 * checkpoint_wr_time * (c_params.mtti * 60 * 60)) - checkpoint_wr_time;
+
+        if(!ns->local_rank)
+            printf("\n Delay for synthetic traffic %lf ", checkpoint_interval - 2.0);
+
+        tw_stime nano_secs = s_to_ns(checkpoint_interval - 2.0);
         ns->start_time = tw_now(lp) + nano_secs;
         /* Generate random traffic during the delay */
         tw_event * e;
         struct test_checkpoint_msg * m_new;
-        tw_stime ts = nano_secs + tw_rand_exponential(lp->rng, intm_sleep/10000);
+        tw_stime ts = nano_secs + tw_rand_unif(lp->rng);
         e = tw_event_new(lp->gid, ts, lp);
         m_new = tw_event_data(e);
         msg_set_header(test_checkpoint_magic, CLI_BCKGND_GEN, lp->gid, &m_new->h);    
@@ -492,7 +498,7 @@ void generate_random_traffic(
     struct test_checkpoint_msg * msg,
     tw_lp * lp)
 {
-    if(ns->is_finished == 1 || ns->gen_data_sz >= 5000000) 
+    if(ns->is_finished == 1 || ns->gen_data_sz >= MAX_DATA_SZ) 
     {
         b->c8 = 1;
         return;
@@ -507,7 +513,6 @@ void generate_random_traffic(
    if(dest_svr == ns->local_rank)
        dest_svr = (dest_svr + 1) % num_syn_clients;
 
-//   dprintf("\n Cli %ld data size %lu ", ns->cli_rel_id, ns->syn_data_sz);
    struct test_checkpoint_msg * m_remote = malloc(sizeof(struct test_checkpoint_msg));
    msg_set_header(test_checkpoint_magic, CLI_BCKGND_COMPLETE, lp->gid, &(m_remote->h));
 
@@ -526,7 +531,7 @@ void generate_random_traffic(
            0, NULL, lp);
 
    /* New event after MEAN_INTERVAL */
-    tw_stime ts = MEAN_INTERVAL + tw_rand_exponential(lp->rng, MEAN_INTERVAL/10000); 
+    tw_stime ts = MEAN_INTERVAL + tw_rand_unif(lp->rng); 
     tw_event * e;
     struct test_checkpoint_msg * m_new;
     e = tw_event_new(lp->gid, ts, lp);
@@ -836,7 +841,7 @@ static void test_checkpoint_init(
     jid = codes_jobmap_to_local_id(ns->cli_rel_id, jobmap_ctx);
     if(jid.job == -1)
     {
-        printf("\n Cli %ld not generating job ", ns->cli_rel_id);
+//        printf("\n Cli %ld not generating job ", ns->cli_rel_id);
         ns->app_id = -1;
         ns->local_rank = -1;
         return;
@@ -892,10 +897,7 @@ static void test_checkpoint_finalize(
     total_syn_data += ns->syn_data_sz;
 
    int written = 0;
-   if(!ns->cli_rel_id)
-      written = sprintf(ns->output_buf, "# Format <LP id> <Workload type> <client id> <Bytes written> <Synthetic data Received> <Time to write bytes > <Total elapsed time>");
-   
-   written += sprintf(ns->output_buf + written, "%lu %s %d %lu %lld %lf %lf\n", lp->gid, wkld_type_per_job[jid.job], ns->cli_rel_id, ns->write_size, ns->syn_data_sz, ns->total_write_time, tw_now(lp) - ns->start_time);
+   written += sprintf(ns->output_buf + written, "\n%lu %s %d %lu %lld %lf %lf", lp->gid, wkld_type_per_job[jid.job], ns->cli_rel_id, ns->write_size, ns->syn_data_sz, ns->total_write_time, tw_now(lp) - ns->start_time);
    lp_io_write(lp->gid, "checkpoint-client-stats", written, ns->output_buf);   
 }
 
@@ -940,17 +942,15 @@ void test_checkpoint_configure(int model_net_id){
 	   &c_params.mtti);
     assert(!rc);
    
-    rc = configuration_get_value_double(&config, "test-checkpoint-client", "intm_delay", NULL,
-	   &intm_sleep);
-    assert(!rc);
-    
     num_servers =
         codes_mapping_get_lp_count(NULL, 0, CODES_STORE_LP_NAME, NULL, 1);
     num_clients = 
         codes_mapping_get_lp_count(NULL, 0, CHK_LP_NM, NULL, 1);
 
     c_params.nprocs = num_chk_clients;
-    my_checkpoint_sz = terabytes_to_megabytes(c_params.checkpoint_sz)/num_chk_clients;
+    
+    if(num_chk_clients)
+        my_checkpoint_sz = terabytes_to_megabytes(c_params.checkpoint_sz)/num_chk_clients;
 
     clients_per_server = num_clients / num_servers;
     if (clients_per_server == 0)
@@ -965,6 +965,8 @@ const tw_optdef app_opt[] = {
     TWOPT_CHAR("lp-io-dir", lp_io_dir, "Where to place io output (unspecified -> no output"),
     TWOPT_UINT("lp-io-use-suffix", lp_io_use_suffix, "Whether to append uniq suffix to lp-io directory (default 0)"),
     TWOPT_UINT("random-bb", random_bb_nodes, "Whether use randomly selected burst buffer nodes or nearby nodes"),
+    TWOPT_UINT("payload-sz", PAYLOAD_SZ, "payload size for synthetic traffic message "),
+    TWOPT_UINT("max-data-sz", MAX_DATA_SZ, "max data size for synthetic traffic message "),
     TWOPT_END()
 };
 
@@ -1075,7 +1077,17 @@ int main(int argc, char * argv[])
     lsm_configure();
     test_checkpoint_configure(model_net_id);
 
+    if(!g_tw_mynode)
+    {
+        char meta_file[64];
+        sprintf(meta_file, "checkpoint-client-stats.meta");
+        
+        FILE * fp = fopen(meta_file, "w+");
+        fprintf(fp, "# Format <LP id> <Workload type> <client id> <Bytes written> <Synthetic data received> <Time to write bytes> <Total time elapsed>");
+        fclose(fp);
 
+        printf("\n My checkpoint sz %lf ", my_checkpoint_sz);
+    }
     if (lp_io_dir[0]){
         do_lp_io = 1;
         /* initialize lp io */
@@ -1098,7 +1110,7 @@ int main(int argc, char * argv[])
         printf("\n Maximum time spent by compute nodes %lf Maximum time spent in write operations %lf", g_max_total_time, g_max_write_time);
         printf("\n Avg time spent by compute nodes %lf Avg time spent in write operations %lf\n", g_avg_time/num_clients, g_avg_write_time/num_chk_clients);
 
-        printf("\n Synthetic traffic stats: data received per proc %lf ", total_syn_data/num_syn_clients);
+        printf("\n Synthetic traffic stats: data received per proc %lf ", g_total_syn_data/num_syn_clients);
     }
     if (do_lp_io){
         int ret = lp_io_flush(io_handle, MPI_COMM_WORLD);
