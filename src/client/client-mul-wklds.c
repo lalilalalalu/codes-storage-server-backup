@@ -228,7 +228,7 @@ static void notify_background_traffic(
         tw_stime ts = (1.1 * g_tw_lookahead) + tw_rand_exponential(lp->rng, MEAN_INTERVAL/10000);
         tw_lpid global_dest_id;
  
-        dprintf("\n Checkpoint LP %llu lpid %d notifying background traffic!!! ", lp->gid, ns->local_rank);
+        //dprintf("\n Checkpoint LP %llu lpid %d notifying background traffic!!! ", lp->gid, ns->local_rank);
         for(int k = 0; k < num_other_ranks; k++)    
         {
             other_jid.rank = k;
@@ -284,7 +284,7 @@ static void notify_neighbor(
     {
         bf->c1 = 1;
 
-        dprintf("\n Local rank %d notifying neighbor %d ", ns->local_rank, ns->local_rank+1);
+        //dprintf("\n Local rank %d notifying neighbor %d ", ns->local_rank, ns->local_rank+1);
         tw_stime ts = (1.1 * g_tw_lookahead) + tw_rand_exponential(lp->rng, MEAN_INTERVAL/10000);
         nbr_jid.rank = ns->local_rank + 1;
         
@@ -355,7 +355,7 @@ static void send_req_to_store(
             0, &h, &ns->cb);
 
     //if(ns->cli_rel_id == TRACK)
-        dprintf("%llu: sent %s request\n", lp->gid, is_write ? "write" : "read");
+        //dprintf("%llu: sent %s request\n", lp->gid, is_write ? "write" : "read");
 
     if(is_write)
     {
@@ -441,7 +441,7 @@ void finish_bckgnd_traffic(
         ns->num_bursts++;
         ns->is_finished = 1;
 
-        dprintf("\n LP %llu completed sending data %lld completed at time %lf ", lp->gid, ns->gen_data_sz, tw_now(lp));
+        //dprintf("\n LP %llu completed sending data %lld completed at time %lf ", lp->gid, ns->gen_data_sz, tw_now(lp));
 
         if(ns->num_bursts < total_checkpoints)
         {
@@ -589,7 +589,7 @@ static void next_checkpoint_op(
    {
 	case CODES_WK_BARRIER:
 	{
-//        if(ns->cli_rel_id == TRACK)
+        if(ns->cli_rel_id == TRACK)
 		   tw_output(lp, "Client rank %d hit barrier.\n", ns->cli_rel_id);
 		
         handle_next_operation(ns, lp, codes_local_latency(lp));
@@ -598,7 +598,7 @@ static void next_checkpoint_op(
 
 	case CODES_WK_DELAY:
 	{
-//        if(ns->cli_rel_id == TRACK)
+        if(ns->cli_rel_id == TRACK)
 		    tw_output(lp, "Client rank %d will delay for %lf seconds.\n", ns->cli_rel_id,
                 op_rc->u.delay.seconds);
         tw_stime nano_secs = s_to_ns(op_rc->u.delay.seconds);
@@ -608,7 +608,7 @@ static void next_checkpoint_op(
 
     case CODES_WK_OPEN:
 	{
-//        if(ns->cli_rel_id == TRACK)
+        if(ns->cli_rel_id == TRACK)
 		   tw_output(lp, "Client rank %d will open file id %llu \n ", ns->cli_rel_id,
 		    op_rc->u.open.file_id);
 		handle_next_operation(ns, lp, codes_local_latency(lp));
@@ -617,7 +617,7 @@ static void next_checkpoint_op(
 	
 	case CODES_WK_CLOSE:
 	{	
-//        if(ns->cli_rel_id == TRACK)
+        if(ns->cli_rel_id == TRACK)
 		    tw_output(lp, "Client rank %d will close file id %llu \n ", ns->cli_rel_id,
                     op_rc->u.close.file_id);
 		handle_next_operation(ns, lp, codes_local_latency(lp));
@@ -625,7 +625,7 @@ static void next_checkpoint_op(
 	break;
 	case CODES_WK_WRITE:
 	{
-//        if(ns->cli_rel_id == TRACK)
+        if(ns->cli_rel_id == TRACK)
 		    tw_output(lp, "Client rank %d initiate write operation size %ld offset %ld .\n", ns->cli_rel_id, 
 	            op_rc->u.write.size, op_rc->u.write.offset);
 		send_req_to_store(ns, lp, bf, op_rc, msg, 1);
@@ -634,7 +634,7 @@ static void next_checkpoint_op(
 
 	case CODES_WK_READ:
 	{
-//        if(ns->cli_rel_id == TRACK)
+        if(ns->cli_rel_id == TRACK)
 		    tw_output(lp, "Client rank %d initiate write operation size %ld offset %ld .\n", ns->cli_rel_id, op_rc->u.read.size, op_rc->u.read.offset);
                 ns->num_sent_rd++;
 		send_req_to_store(ns, lp, bf, op_rc, msg, 0);
