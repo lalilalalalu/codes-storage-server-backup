@@ -1086,7 +1086,7 @@ int main(int argc, char * argv[])
         fprintf(fp, "# Format <LP id> <Workload type> <client id> <Bytes written> <Synthetic data received> <Time to write bytes> <Total time elapsed>");
         fclose(fp);
 
-        printf("\n My checkpoint sz %lf ", my_checkpoint_sz);
+        printf("\n My checkpoint sz %lf MiB", my_checkpoint_sz);
     }
     if (lp_io_dir[0]){
         do_lp_io = 1;
