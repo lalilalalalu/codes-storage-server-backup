@@ -14,8 +14,8 @@
 #include <codes/codes-jobmap.h>
 #include <codes/resource-lp.h>
 #include <codes/local-storage-model.h>
-#include "../codes/codes-external-store.h"
-#include "../codes/codes-store-lp.h"
+#include "codes/codes-external-store.h"
+#include "codes/codes-store-lp.h"
 
 #define CHK_LP_NM "test-checkpoint-client"
 #define MEAN_INTERVAL 550055
@@ -36,7 +36,7 @@ static int do_lp_io = 0;
 static int extrapolate_factor = 10;
 static lp_io_handle io_handle;
 static unsigned int PAYLOAD_SZ=1024;
-static unsigned int MAX_DATA_SZ = 5000000000;
+//static unsigned int MAX_DATA_SZ = 500000;
 
 static char workloads_conf_file[4096] = {'\0'};
 static char alloc_file[4096] = {'\0'};
@@ -498,7 +498,7 @@ void generate_random_traffic(
     struct test_checkpoint_msg * msg,
     tw_lp * lp)
 {
-    if(ns->is_finished == 1 || ns->gen_data_sz >= MAX_DATA_SZ) 
+    if(ns->is_finished == 1) 
     {
         b->c8 = 1;
         return;
@@ -966,7 +966,7 @@ const tw_optdef app_opt[] = {
     TWOPT_UINT("lp-io-use-suffix", lp_io_use_suffix, "Whether to append uniq suffix to lp-io directory (default 0)"),
     TWOPT_UINT("random-bb", random_bb_nodes, "Whether use randomly selected burst buffer nodes or nearby nodes"),
     TWOPT_UINT("payload-sz", PAYLOAD_SZ, "payload size for synthetic traffic message "),
-    TWOPT_UINT("max-data-sz", MAX_DATA_SZ, "max data size for synthetic traffic message "),
+//    TWOPT_UINT("max-data-sz", MAX_DATA_SZ, "max data size for synthetic traffic message "),
     TWOPT_END()
 };
 
@@ -1005,7 +1005,7 @@ int main(int argc, char * argv[])
     assert(wkld_info_file);
 
     int i =0;
-    char separator = "\n";
+    char separator = '\n';
     while(!feof(wkld_info_file))
     {
         separator = fscanf(wkld_info_file, "%d %s", &num_jobs_per_wkld[i], wkld_type_per_job[i]);
