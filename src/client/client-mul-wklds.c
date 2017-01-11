@@ -551,7 +551,7 @@ static void next_checkpoint_op(
     if(ns->op_status_ct > 0)
     {
         char buf[64];
-        int written = sprintf(buf, "I/O workload operator error: %llu  \n",lp->gid);
+        int written = sprintf(buf, "I/O workload operator error: %"PRIu64"  \n",lp->gid);
 
         lp_io_write(lp->gid, "errors %d %s ", written, buf);
         return;
@@ -717,7 +717,7 @@ static void test_checkpoint_event(
         return;
     }
     if(m->h.magic != test_checkpoint_magic)
-        printf("\n Msg magic %d checkpoint magic %d event-type %d src %llu ", m->h.magic, 
+        printf("\n Msg magic %d checkpoint magic %d event-type %d src %"PRIu64" ", m->h.magic,
                test_checkpoint_magic,
                m->h.event_type,
                m->h.src);
@@ -897,7 +897,7 @@ static void test_checkpoint_finalize(
     total_syn_data += ns->syn_data_sz;
 
    int written = 0;
-   written += sprintf(ns->output_buf + written, "\n%lu %s %d %lu %lld %lf %lf", lp->gid, wkld_type_per_job[jid.job], ns->cli_rel_id, ns->write_size, ns->syn_data_sz, ns->total_write_time, tw_now(lp) - ns->start_time);
+   written += sprintf(ns->output_buf + written, "\n%lu %s %d %lu %"PRId64" %lf %lf", lp->gid, wkld_type_per_job[jid.job], ns->cli_rel_id, ns->write_size, ns->syn_data_sz, ns->total_write_time, tw_now(lp) - ns->start_time);
    lp_io_write(lp->gid, "checkpoint-client-stats", written, ns->output_buf);   
 }
 
