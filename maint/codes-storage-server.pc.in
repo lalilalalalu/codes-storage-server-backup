@@ -7,6 +7,6 @@ Name: codes-storage-server
 Description: Storage LPs, specifically geared towards node-local / burst-buffer storage
 Version: @PACKAGE_VERSION@
 URL: http://www.mcs.anl.gov/research/projects/codes/
-Requires: codes-net codes-base
+Requires: codes
 Libs: -L${libdir} -lcodes-storage-server
 Cflags: -I${includedir}

@@ -12,6 +12,7 @@ src_libcodes_storage_server_a_SOURCES = \
 	src/client/codes-store-client-barrier-lp-impl.c \
 	src/client/io-sim-mode.h \
 	src/client/io-sim-mode.c \
+	src/client/client-dummy.c \
 	src/client/dist.h \
 	src/client/dist.c \
 	src/client/oid-map.h \
