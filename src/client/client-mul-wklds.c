@@ -902,7 +902,7 @@ static void test_checkpoint_finalize(
    //if(!ns->cli_rel_id)
    //   written = sprintf(ns->output_buf, "# Format <LP id> <Workload type> <client id> <Bytes written> <Synthetic data Received> <Time to write bytes > <Total elapsed time>");
    
-   written += sprintf(ns->output_buf + written, "\n%"PRId64" %s %d %llu %"PRId64" %lf %lf", lp->gid, wkld_type_per_job[jid.job], ns->cli_rel_id, ns->write_size, ns->syn_data_sz, ns->total_write_time, tw_now(lp) - ns->start_time);
+   written += sprintf(ns->output_buf + written, "%"PRId64" %s %d %llu %"PRId64" %lf %lf\n", lp->gid, wkld_type_per_job[jid.job], ns->cli_rel_id, ns->write_size, ns->syn_data_sz, ns->total_write_time, tw_now(lp) - ns->start_time);
    lp_io_write(lp->gid, "checkpoint-client-stats", written, ns->output_buf);   
 }
 
