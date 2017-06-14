@@ -17,6 +17,9 @@
 
 #include "codes-store-lp-internal.h"
 
+int ces_magic = 0;
+int es_mn_id = 0;
+
 /* the external store LP only keeps track of the number of bytes written */
 typedef struct es_state_s {
 	/* number of total bytes written on external store */

@@ -1,6 +1,6 @@
-lib_LIBRARIES += src/libcodes-storage-server.a
+lib_LTLIBRARIES += src/libcodes-storage-server.la
 
-src_libcodes_storage_server_a_SOURCES = \
+src_libcodes_storage_server_la_SOURCES = \
 	src/server/codes-store-lp-api.c \
 	src/server/codes-store-pipeline.c \
 	src/server/codes-store-pipeline.h \
@@ -16,8 +16,7 @@ src_libcodes_storage_server_a_SOURCES = \
 	src/client/dist.h \
 	src/client/dist.c \
 	src/client/oid-map.h \
-	src/client/oid-map.c \
-	src/client/client-mul-wklds.c
+	src/client/oid-map.c 
 
 bin_PROGRAMS += src/client/client-mul-wklds
 src_client_client_mul_wklds_SOURCES = \

@@ -17,7 +17,6 @@
 #include <codes/codes-callback.h>
 #include <codes/quicklist.h>
 #include <codes/resource.h>
-#include <codes/codes-external-store.h>
 #include <codes/codes-mapping-context.h>
 
 #include "codes-store-lp-internal.h"

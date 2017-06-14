@@ -5,7 +5,7 @@ bin_PROGRAMS =
 bin_SCRIPTS =
 noinst_LIBRARIES =
 noinst_PROGRAMS =
-lib_LIBRARIES =
+lib_LTLIBRARIES =
 noinst_HEADERS =
 TESTS =
 XFAIL_TESTS =
@@ -29,7 +29,7 @@ AM_LDFLAGS =
 AM_CXXFLAGS = $(AM_CFLAGS)
 
 # all programs/tests use the libraries here
-LDADD = $(lib_LIBRARIES) ${CODES_LIBS}
+LDADD = $(lib_LTLIBRARIES) ${CODES_LIBS}
 
 include Make.rules
 

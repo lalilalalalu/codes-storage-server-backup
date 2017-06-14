@@ -17,8 +17,8 @@
 
 /**** LP name ****/
 extern char const * const CODES_EX_STORE_LP_NAME;
-int ces_magic;
-int es_mn_id;
+extern int ces_magic;
+extern int es_mn_id;
 // LP API parameters
 
 enum codes_ex_store_req_type {
