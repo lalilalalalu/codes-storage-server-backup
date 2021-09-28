@@ -5,6 +5,15 @@ https://xgitlab.cels.anl.gov/codes/codes/wikis/installation
 
 - Build codes-storage-server
 
+if use branch "makefix" then skip step 1 and 2
+1.Changes Makefile:
+AM_CPPFLAGS = ${CODES_CFLAGS} ${ROSS_CFLAGS}
+LDADD = $(lib_LTLIBRARIES) ${CODES_LIBS} ${ROSS_LIBS}
+
+2.Changes Configure.ac
+add PKG_CHECK_MODULES_STATIC([ROSS], [ross], [], [AC_MSG_ERROR([Could not find working ross installation via pkg-config])])
+
+
 ./prepare.sh
 
 mkdir build
@@ -13,6 +22,8 @@ cd build
 
 ../configure PKG_CONFIG_PATH=/path/to/codes/install/lib/pkgconfig
 CC=mpicc CXX=mpicxx CCLD=mpicxx CFLAGS=-g -O0 --prefix=/path/to/codes-storage-server/install
+
+../configure PKG_CONFIG_PATH=/home/flash/codes-dev/codes/build/lib/pkgconfig:/home/flash/codes-dev/build-ross/lib/pkgconfig CC=mpicc CXX=mpicxx CCLD=mpicxx CFLAGS=-g --prefix=/home/flash/codes-dev/codes
 
 make -j 3
 
