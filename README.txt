@@ -89,6 +89,10 @@ file and a job allocation file. Here are the details on each of these files:
 --lp-io-dir=test-checkpoint
 --lp-io-use-suffix=1 
 
+mpirun -np 10 ./src/client/client-mul-wklds --sync=3 --workload-conf-file=../checkpoint-study/workload-files/workload-1024.conf --rank-alloc-file=../checkpoint-study/allocations/contiguous/cont-alloc-8832-1024.conf --codes-config=../tests/conf/test-checkpoint-dfly-1T.conf --lp-io-dir=test-checkpoint --lp-io-use-suffix=1 
+
+
+
 --> For generating job scripts on clusters, see job-generation-scripts.
 
 --> Generate job allocation files from scratch using job placement policies, see codes/scripts/allocation_gen/README 

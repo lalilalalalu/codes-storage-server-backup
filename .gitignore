@@ -39,3 +39,7 @@ install/
 build/
 #  john's commonly-used configure options
 myconfig.sh
+
+/m4
+
+ltmain.sh
