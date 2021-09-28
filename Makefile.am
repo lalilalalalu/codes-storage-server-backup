@@ -20,7 +20,7 @@ pkgconfigdir = $(libdir)/pkgconfig
 pkgconfig_DATA = maint/codes-storage-server.pc
 $(pkgconfig_DATA): config.status
 
-AM_CPPFLAGS = ${CODES_CFLAGS}
+AM_CPPFLAGS = ${CODES_CFLAGS} ${ROSS_CFLAGS}
 
 AM_CFLAGS =
 
@@ -29,7 +29,7 @@ AM_LDFLAGS =
 AM_CXXFLAGS = $(AM_CFLAGS)
 
 # all programs/tests use the libraries here
-LDADD = $(lib_LTLIBRARIES) ${CODES_LIBS}
+LDADD = $(lib_LTLIBRARIES) ${CODES_LIBS} ${ROSS_LIBS}
 
 include Make.rules
 

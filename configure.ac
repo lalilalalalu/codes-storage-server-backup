@@ -37,6 +37,9 @@ AC_TRY_COMPILE([#include <mpi.h>], [int ret = MPI_Init(0, (void*)0)],
                   line.])
 )
 
+# check for ross
+PKG_CHECK_MODULES_STATIC([ROSS], [ross], [], [AC_MSG_ERROR([Could not find working ross installation via pkg-config])])
+
 # check for codes-net (codes-base is implicit)
 PKG_CHECK_MODULES_STATIC([CODES], [codes], [],
                   [AC_MSG_ERROR([Could not find working codes installation via pkg-config])])
